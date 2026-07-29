@@ -462,7 +462,7 @@ def _parser() -> argparse.ArgumentParser:
     commands.add_parser("kill-worker", help="hard kill the recorded Worker PID")
 
     watch = commands.add_parser(
-        "watch", help="live two panel view of THE AGENT and THE SYSTEM"
+        "watch", help="live two panel view of THE AGENT and THE SYSTEM OF RECORD"
     )
     watch.add_argument("workflow_id")
 

@@ -1,11 +1,11 @@
-"""A stage viewer: THE AGENT beside THE SYSTEM, updating live.
+"""A stage viewer: THE AGENT beside THE SYSTEM OF RECORD, updating live.
 
 This is a read-only presentation tool. It never changes Workflow behavior.
 
 THE AGENT panel reflects the Worker's in-process view, which the Worker mirrors
 to a file. The panel reads as lost the moment the Worker process is gone, so a
-restart blanks it on stage. THE SYSTEM panel is read from Temporal and the refund
-ledger, which survive a restart. That contrast is the whole point of the talk.
+restart blanks it on stage. THE SYSTEM OF RECORD panel is read from Temporal and
+the refund ledger, which survive a restart. That contrast is the point.
 """
 
 from __future__ import annotations
@@ -117,7 +117,7 @@ async def _system_panel(client: Client, workflow_id: str) -> Panel:
     except RPCError:
         body.append("waiting for workflow\n\n", style="dim")
         body.append(f"no execution named {workflow_id} yet", style="dim")
-        return Panel(body, title="THE SYSTEM (durable)", border_style="green")
+        return Panel(body, title="THE SYSTEM OF RECORD (durable)", border_style="green")
 
     status = description.status.name if description.status else "UNKNOWN"
     history = await handle.fetch_history()
@@ -164,7 +164,9 @@ async def _system_panel(client: Client, workflow_id: str) -> Panel:
             f"  calls {refund.get('calls')}  unique refunds 1\n"
         )
     return Panel(
-        body, title="THE SYSTEM (Temporal + Stripe, durable)", border_style="green"
+        body,
+        title="THE SYSTEM OF RECORD (Temporal + Stripe, durable)",
+        border_style="green",
     )
 
 
@@ -173,7 +175,7 @@ def _header(workflow_id: str) -> Panel:
     text.append(f"durable refund agent   workflow {workflow_id}\n", style="bold")
     text.append(
         "THE AGENT = in process, lost on restart      "
-        "THE SYSTEM = Temporal + Stripe, durable",
+        "THE SYSTEM OF RECORD = Temporal + Stripe, durable",
         style="dim",
     )
     return Panel(text, border_style="white")

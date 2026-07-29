@@ -66,7 +66,7 @@ def show_empty_agent_view() -> None:
     _agent_views.clear()
     # A new Worker process holds no agent memory, so wipe the on-disk mirror the
     # TUI reads. After a restart this is what makes THE AGENT panel
-    # read empty while THE SYSTEM panel resumes.
+    # read empty while THE SYSTEM OF RECORD panel resumes.
     for path in state_dir().glob("agent-view-*.json"):
         path.unlink(missing_ok=True)
     _line("THE AGENT", "new process, in-process view is empty")

@@ -161,19 +161,20 @@ def _reset(_args: argparse.Namespace) -> None:
 
 
 def _process_interactive(agent: dict, ledger: list) -> None:
-    # Context and memory are recomputed every run (recomputable). Process-local
-    # state (whether this order was already refunded) lives only in this dict,
-    # so a restart that clears it makes the agent refund again.
-    order, amount = "1234", 8000
-    agent["context"] = {"order": order, "amount": amount, "customer": "cus_demo_42"}
-    agent["memory"] = {"tenure_days": 824, "prior_refunds": 1}
+    # Context and memory are recomputed every run (recomputable): the request and
+    # the customer lookup can always be re-fetched. Process-local state (whether
+    # this order was already refunded) lives only in this dict, so a restart that
+    # clears it makes the agent refund again.
+    order, amount, customer = "1234", 8000, "42"
+    agent["context"] = {"order": order, "amount": amount, "customer": customer}
+    agent["memory"] = {"tenure_days": 824, "prior_refunds": 0}
     if agent.get("recorded"):
-        agent["note"] = "completion on record; already refunded, skipped"
+        agent["note"] = "already refunded (it has that recorded), so it skips"
         return
     refund_id = f"re_naive_{uuid.uuid4().hex[:8]}"
     ledger.append({"refund_id": refund_id, "order": order, "amount": amount})
     agent["recorded"] = True
-    agent["note"] = f"issued {refund_id} and recorded completion"
+    agent["note"] = f"issued {refund_id}, recorded 'done' in its own process"
 
 
 def _demo_frame(agent: dict, ledger: list):
@@ -186,7 +187,7 @@ def _demo_frame(agent: dict, ledger: list):
         if agent.get("_restarted"):
             left.append("LOST\n\n", style="bold red")
             left.append(
-                "the worker restarted (deploy, eviction, OOM);\n"
+                "the agent restarted (deploy, eviction, OOM);\n"
                 "its in-memory state is gone, including\n"
                 "whether it already refunded",
                 style="red",
@@ -194,7 +195,7 @@ def _demo_frame(agent: dict, ledger: list):
         else:
             left.append("idle\n\n", style="dim")
             left.append(
-                "no request in flight; press Enter to process a refund",
+                "no request yet; type a refund request (or Enter)",
                 style="dim",
             )
     else:
@@ -203,19 +204,20 @@ def _demo_frame(agent: dict, ledger: list):
         amount = (context.get("amount") or 0) / 100
         left.append("CONTEXT\n", style="bold yellow")
         left.append(
-            f"  order {context.get('order')}, ${amount:.2f}, "
-            f"{context.get('customer')}\n\n"
+            f"  Customer {context.get('customer')} requested a refund\n"
+            f"  for order {context.get('order')}, ${amount:.2f}\n\n"
         )
         left.append("MEMORY\n", style="bold blue")
         left.append(
-            f"  {memory.get('tenure_days')} days tenure, "
-            f"{memory.get('prior_refunds')} prior refund\n\n"
+            f"  looked up customer {context.get('customer')} in the DB:\n"
+            f"  {memory.get('tenure_days')} days, "
+            f"{memory.get('prior_refunds')} prior refunds\n\n"
         )
         left.append("PROCESS-LOCAL STATE\n", style="bold green")
         if agent.get("recorded"):
             left.append(f"  {agent.get('note')}\n")
         else:
-            left.append("  nothing done yet\n", style="dim")
+            left.append("  nothing recorded yet\n", style="dim")
 
     right = Text()
     right.append(f"{len(ledger)} refund(s) committed\n\n", style="bold")
@@ -233,8 +235,8 @@ def _demo_frame(agent: dict, ledger: list):
         "Demo 1: a refund agent with no durable execution", border_style="cyan"
     )
     footer = Panel(
-        "Enter or 'refund' = process the refund    restart = worker restarts    "
-        "reset    quit",
+        "Enter or a refund request = process    "
+        "agent restart / deploy / OOM    reset    quit",
         border_style="dim",
     )
     layout = Layout()
@@ -253,7 +255,7 @@ def _demo_frame(agent: dict, ledger: list):
             name="agent",
         ),
         Layout(
-            Panel(right, title="THE WORLD (durable ledger)", border_style="green"),
+            Panel(right, title="THE RECORD (durable ledger)", border_style="green"),
             name="world",
         ),
     )
@@ -278,15 +280,24 @@ def _run_interactive() -> None:
             break
         if command in ("quit", "q", "exit"):
             break
-        if command in ("restart", "deploy", "crash"):
-            # A deploy, rolling restart, eviction, or OOM: the process and its
-            # in-memory state are gone. A crash is just the blunt version.
+        if command in (
+            "agent restart",
+            "agent deploy",
+            "agent oom",
+            "restart",
+            "deploy",
+            "oom",
+            "crash",
+        ):
+            # The agent process goes away: a restart, a deploy, an eviction, an
+            # OOM kill. Its in-memory state is gone, including whether it already
+            # refunded. A crash is just the blunt version.
             agent.clear()
             agent["_restarted"] = True
         elif command == "reset":
             agent.clear()
             ledger.clear()
-        elif command in ("", "refund", "go"):
+        elif command in ("", "go") or "refund" in command:
             _process_interactive(agent, ledger)
 
 

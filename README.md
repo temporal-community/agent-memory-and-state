@@ -135,7 +135,7 @@ uv run naive-refund
 
 The left pane is THE AGENT (in process): context, memory, and process-local
 state, the ghost band the restart loses.
-The right pane is THE WORLD, the durable ledger of committed refunds. Drive it:
+The right pane is THE RECORD, the durable ledger of committed refunds. Drive it:
 
 - Press Enter (or type `refund`) to process the refund. The agent decides,
   refunds, and records completion; the ledger shows one refund.
@@ -282,7 +282,7 @@ Worker you do not restart cannot time out its own attempt.
 
 ### The two-panel view
 
-In its own terminal, watch THE AGENT beside THE SYSTEM:
+In its own terminal, watch THE AGENT beside THE SYSTEM OF RECORD:
 
 ```bash
 uv run refund-demo watch demo-restart
