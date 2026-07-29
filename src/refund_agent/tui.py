@@ -55,9 +55,10 @@ def _agent_panel(workflow_id: str) -> Panel:
     if not alive:
         body.append("LOST\n\n", style="bold red")
         body.append(
-            "no live Worker holds this view\n"
-            "context, memory, and the decision lived in\n"
-            "the Worker process and went with it",
+            "this panel is the Worker's live view.\n"
+            "it dies with the Worker. Temporal keeps the\n"
+            "recorded steps and replays them, so the run\n"
+            "resumes when a Worker returns",
             style="red",
         )
         return Panel(body, title="THE AGENT (in process)", border_style="red")
@@ -71,7 +72,7 @@ def _agent_panel(workflow_id: str) -> Panel:
             view = {}
     if not view:
         body.append("empty\n\n", style="dim")
-        body.append("new process, no memory yet", style="dim")
+        body.append("new process, nothing retrieved yet", style="dim")
         return Panel(body, title="THE AGENT (in process)", border_style="cyan")
 
     context = view.get("context") or {}
@@ -85,7 +86,7 @@ def _agent_panel(workflow_id: str) -> Panel:
         f"  customer {context.get('customer_id')}\n"
         f"  amount   {context.get('amount_cents')} cents\n\n"
     )
-    body.append("MEMORY (retrieved this run)\n", style="bold cyan")
+    body.append("STEPS RETRIEVED (this run)\n", style="bold cyan")
     if observations:
         for obs in observations:
             body.append(f"  {obs.get('tool')}\n")

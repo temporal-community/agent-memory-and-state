@@ -288,12 +288,13 @@ In its own terminal, watch THE AGENT beside THE SYSTEM:
 uv run refund-demo watch demo-restart
 ```
 
-The left panel is the Worker's in-process view: context, the memory it
-retrieved, and the decision. It reads LOST the moment the Worker is killed, and
-empty after a restart, because that knowledge lived only in the process. The
-right panel is status, the beats, the pending Activity and its attempt, and the
-refund record, all read from Temporal and the ledger, which survive the restart.
-Make the terminal fullscreen for stage. Press Ctrl+C to exit.
+The left panel is the Worker's in-process view: context, the steps it retrieved
+this run, and the decision. It reads LOST the moment the Worker is killed,
+because that panel is the Worker's live view. The right panel is status, the
+beats, the pending Activity and its attempt, and the refund record, all read
+from Temporal and the ledger. Those survive the restart, and Temporal replays
+the recorded steps so the run resumes when a Worker returns. Make the terminal
+fullscreen for stage. Press Ctrl+C to exit.
 
 ### Real Stripe test mode
 
@@ -307,9 +308,9 @@ A refund needs a paid PaymentIntent to refund against. The simplest path seeds
 one and refunds it in a single command, so there is no id to copy:
 
 ```bash
-uv run refund-demo start --real --seed --workflow-id demo-real
-uv run refund-demo approve demo-real "approved"   # only if it escalates
-uv run refund-demo result demo-real
+uv run refund-demo start --real --seed --workflow-id real-refund
+uv run refund-demo approve real-refund "approved"   # only if it escalates
+uv run refund-demo result real-refund
 ```
 
 `--seed` creates a succeeded test charge (with the pm_card_visa test card) and
@@ -383,3 +384,13 @@ Not production. No auth, no database, no multi-agent orchestration, no web
 application, no operational hardening. The job is to make context, memory,
 execution state, an autonomous loop, a durable wait, an uncertain effect, and
 idempotent recovery visible in one short arc.
+
+One distinction the demo leans on: execution state (where the work stands) and
+memory (what the agent knows) are different concerns. It shows Temporal capturing
+and replaying the execution state, the steps the agent took. It does not take on
+how the agent's memory is stored or managed, and where durable execution and
+agent memory best fit together is an open question.
+
+## Acknowledgments
+
+Thanks to Cecil for the review that shaped how this repo frames memory and state.
