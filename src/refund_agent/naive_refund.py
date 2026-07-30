@@ -184,18 +184,17 @@ def _demo_frame(agent: dict, ledger: list):
 
     left = Text()
     if "context" not in agent:
+        left.append("How can I help you?\n\n", style="bold cyan")
         if agent.get("_restarted"):
-            left.append("LOST\n\n", style="bold red")
             left.append(
-                "the agent restarted (deploy, eviction, OOM);\n"
-                "its in-memory state is gone, including\n"
-                "whether it already refunded",
-                style="red",
+                "the worker restarted (deploy, eviction, OOM).\n"
+                "its context is empty; it does not know it\n"
+                "already refunded this order",
+                style="yellow",
             )
         else:
-            left.append("idle\n\n", style="dim")
             left.append(
-                "no request yet; type a refund request (or Enter)",
+                "waiting for a refund request (type one, or Enter)",
                 style="dim",
             )
     else:
@@ -230,9 +229,13 @@ def _demo_frame(agent: dict, ledger: list):
     if any(count > 1 for count in counts.values()):
         right.append("\nDUPLICATE REFUND\n", style="bold red")
 
-    restarted = "_restarted" in agent and "context" not in agent
-    header = Panel(
-        "Demo 1: a refund agent with no durable execution", border_style="cyan"
+    header = Panel("Demo 1: Naive Refund Agent", border_style="cyan")
+    why = Panel(
+        "- the check and the act are not atomic, so a retry can act twice\n"
+        "- the record lags (eventual consistency), so a re-check reads stale\n"
+        "- delivery is at-least-once, with no stable key to dedup on",
+        title="why a duplicate happens",
+        border_style="yellow",
     )
     footer = Panel(
         "Enter or a refund request = process    "
@@ -243,6 +246,7 @@ def _demo_frame(agent: dict, ledger: list):
     layout.split_column(
         Layout(header, name="head", size=3),
         Layout(name="body"),
+        Layout(why, name="why", size=5),
         Layout(footer, name="foot", size=3),
     )
     layout["body"].split_row(
@@ -250,7 +254,7 @@ def _demo_frame(agent: dict, ledger: list):
             Panel(
                 left,
                 title="THE AGENT (in process)",
-                border_style="red" if restarted else "cyan",
+                border_style="cyan",
             ),
             name="agent",
         ),

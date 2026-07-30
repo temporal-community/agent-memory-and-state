@@ -8,7 +8,6 @@ import json
 import os
 import signal
 import uuid
-from dataclasses import asdict
 from typing import Any
 
 import stripe
@@ -74,6 +73,7 @@ async def _start(args: argparse.Namespace) -> None:
         amount_cents=args.amount_cents,
         reason=args.reason,
         dry_run=dry_run,
+        hold_after_effect=args.hold,
     )
     await client.start_workflow(
         RefundWorkflow.run,
@@ -82,7 +82,10 @@ async def _start(args: argparse.Namespace) -> None:
         task_queue=task_queue(),
     )
     print(f"EXECUTION STATE | started Workflow {workflow_id}")
-    print(f"CONTEXT | {_json(asdict(request))}")
+    print(
+        f"CONTEXT | refund {request.request_id}: order {request.order_id}, "
+        f"${request.amount_cents / 100:.2f}, customer {request.customer_id}"
+    )
     print(f"Approve | refund-demo approve {workflow_id}")
     print(f"Inspect | refund-demo inspect {workflow_id}")
 
@@ -101,6 +104,19 @@ async def _approve(args: argparse.Namespace) -> None:
             return
         raise
     print(f"EXECUTION STATE | approval Signal recorded for {args.workflow_id}")
+
+
+async def _release(args: argparse.Namespace) -> None:
+    client = await _client()
+    handle = client.get_workflow_handle_for(RefundWorkflow, args.workflow_id)
+    try:
+        await handle.signal(RefundWorkflow.release)
+    except RPCError as error:
+        if _not_found(error):
+            print(f"THE SYSTEM | no Workflow named {args.workflow_id}")
+            return
+        raise
+    print(f"EXECUTION STATE | release Signal recorded for {args.workflow_id}")
 
 
 async def _stop(args: argparse.Namespace) -> None:
@@ -132,7 +148,10 @@ async def _result(args: argparse.Namespace) -> None:
             print(f"THE SYSTEM | no Workflow named {args.workflow_id}")
             return
         raise
-    print(f"THE SYSTEM | known Workflow result\n{_json(asdict(result))}")
+    print(
+        f"THE SYSTEM | result: {result.status}, refund {result.refund_id}, "
+        f"{result.mode}, attempt {result.activity_attempt}"
+    )
 
 
 def _event_rows(history: Any) -> tuple[list[dict[str, object]], dict[str, int]]:
@@ -291,7 +310,13 @@ async def _inspect(args: argparse.Namespace) -> None:
         _print_real_stripe_view(args.workflow_id, args.payment_intent)
 
 
-_DEMO_PAYMENT_DESCRIPTION = "durable refund demo test payment"
+_DEMO_PAYMENT_DESCRIPTION = "plush python (durable refund demo)"
+# cleanup also matches charges seeded before the description was renamed, so a
+# stale test balance from an earlier rehearsal still reconciles.
+_DEMO_PAYMENT_DESCRIPTIONS = (
+    _DEMO_PAYMENT_DESCRIPTION,
+    "durable refund demo test payment",
+)
 
 
 def _create_test_payment(amount_cents: int, currency: str = "usd") -> Any:
@@ -348,7 +373,7 @@ async def _cleanup(args: argparse.Namespace) -> None:
     for intent in intents:
         if not intent.status == "succeeded":
             continue
-        if not (intent.description or "") == _DEMO_PAYMENT_DESCRIPTION:
+        if (intent.description or "") not in _DEMO_PAYMENT_DESCRIPTIONS:
             continue
         try:
             prior = stripe.Refund.list(payment_intent=intent.id, limit=20).data
@@ -432,7 +457,7 @@ def _parser() -> argparse.ArgumentParser:
     start.add_argument("--amount-cents", type=int, default=8000)
     start.add_argument(
         "--reason",
-        default="Shoes separated at the sole after one run",
+        default="The plush python arrived with a split seam",
     )
     mode = start.add_mutually_exclusive_group()
     mode.add_argument("--dry-run", action="store_true", dest="dry_run")
@@ -443,10 +468,21 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="seed a Stripe test PaymentIntent and refund it (implies --real)",
     )
+    start.add_argument(
+        "--hold",
+        action="store_true",
+        help="after the refund, hold the run open so a restart shows replay "
+        "skipping the recorded step (finish with: refund-demo release ID)",
+    )
 
     approve = commands.add_parser("approve", help="send the approval Signal")
     approve.add_argument("workflow_id")
     approve.add_argument("note", nargs="?", default="")
+
+    release = commands.add_parser(
+        "release", help="release a run held open after its refund (start --hold)"
+    )
+    release.add_argument("workflow_id")
 
     stop = commands.add_parser("stop", help="terminate a running Workflow")
     stop.add_argument("workflow_id")
@@ -484,6 +520,8 @@ async def _async_main(args: argparse.Namespace) -> None:
         await _start(args)
     elif args.command == "approve":
         await _approve(args)
+    elif args.command == "release":
+        await _release(args)
     elif args.command == "stop":
         await _stop(args)
     elif args.command == "result":

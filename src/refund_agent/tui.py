@@ -100,9 +100,7 @@ def _agent_panel(workflow_id: str) -> Panel:
         )
     else:
         body.append("  not decided yet\n", style="dim")
-    return Panel(
-        body, title="THE AGENT (in process, lost on restart)", border_style="cyan"
-    )
+    return Panel(body, title="THE AGENT (in process)", border_style="cyan")
 
 
 def _mark(done: bool) -> str:
@@ -134,7 +132,7 @@ async def _system_panel(client: Client, workflow_id: str) -> Panel:
         for name in ("lookup_order", "lookup_customer_history", "check_refund_policy")
         if name in completed
     ]
-    body.append("beats\n", style="bold green")
+    body.append("steps\n", style="bold green")
     body.append(f"  tools used      {', '.join(tools) if tools else '(none yet)'}\n")
     if "approve" in signals:
         approval = "done"
@@ -154,15 +152,28 @@ async def _system_panel(client: Client, workflow_id: str) -> Panel:
         body.append("  none\n")
     body.append("\n")
 
-    body.append("refund record\n", style="bold green")
+    body.append("refund (idempotency-keyed)\n", style="bold green")
     refund = find_refund(workflow_id)
     if refund is None:
-        body.append("  none yet (real mode: see Stripe dashboard)\n", style="dim")
+        body.append("  none yet\n", style="dim")
     else:
+        calls = refund.get("calls", 1)
         body.append(
-            f"  {refund.get('refund_id')}  status {refund.get('status')}\n"
-            f"  calls {refund.get('calls')}  unique refunds 1\n"
+            f"  refund id  {refund.get('refund_id')}\n"
+            f"  status     {refund.get('status')}\n"
+            f"  calls      {calls}\n"
+            "  unique     1 (no duplicate)\n"
         )
+        if calls > 1:
+            body.append(
+                "  same key reused: Stripe returned the same refund\n",
+                style="green",
+            )
+        else:
+            body.append(
+                "  one call; a restart replays this step, not repeats it\n",
+                style="dim",
+            )
     return Panel(
         body,
         title="THE SYSTEM OF RECORD (Temporal + Stripe, durable)",
@@ -172,9 +183,10 @@ async def _system_panel(client: Client, workflow_id: str) -> Panel:
 
 def _header(workflow_id: str) -> Panel:
     text = Text()
-    text.append(f"durable refund agent   workflow {workflow_id}\n", style="bold")
+    text.append("Demo 2: Durable Refund Agent", style="bold")
+    text.append(f"    workflow {workflow_id}\n", style="dim")
     text.append(
-        "THE AGENT = in process, lost on restart      "
+        "THE AGENT = the Worker's in-process view, dies with the Worker      "
         "THE SYSTEM OF RECORD = Temporal + Stripe, durable",
         style="dim",
     )

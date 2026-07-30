@@ -47,6 +47,7 @@ class RefundWorkflow:
         # EXECUTION STATE: Temporal restores all of this by replay after a restart.
         self.approved = False
         self.approval_note = ""
+        self.released = False
         self.working_memory: list[dict] = []
 
     @workflow.run
@@ -108,11 +109,15 @@ class RefundWorkflow:
             )
 
         # EXTERNAL EFFECT: retries reuse one Stripe idempotency key.
-        return await workflow.execute_activity(
+        result = await workflow.execute_activity(
             issue_refund,
-            args=[request, decision],
+            args=[request, decision, self.working_memory],
             start_to_close_timeout=timedelta(minutes=1),
-            schedule_to_close_timeout=timedelta(minutes=2),
+            # Schedule-to-close is the total recovery window: how long the Worker
+            # may be gone before Temporal gives up on the effect and fails the
+            # run. Kept generous so a slow restart on stage still resumes to one
+            # refund instead of failing.
+            schedule_to_close_timeout=timedelta(minutes=10),
             # Heartbeat timeout is the worker-loss detection window. It must exceed
             # the real Stripe call latency so a slow network call is not mistaken
             # for a dead Worker, while staying short enough to detect a real loss.
@@ -120,9 +125,19 @@ class RefundWorkflow:
             retry_policy=RetryPolicy(
                 initial_interval=timedelta(seconds=1),
                 maximum_interval=timedelta(seconds=3),
-                maximum_attempts=5,
+                maximum_attempts=10,
             ),
         )
+
+        if request.hold_after_effect:
+            # DURABLE WAIT after the effect: the refund is already recorded, so a
+            # restart here replays that completed step instead of repeating it.
+            workflow.logger.info(
+                "EXECUTION STATE | phase=holding_after_effect | DURABLE WAIT"
+            )
+            await workflow.wait_condition(lambda: self.released)
+
+        return result
 
     async def _run_tool(self, tool: str | None, request: RefundRequest) -> dict:
         # Dispatch is deterministic: the tool name came from a recorded result,
@@ -158,3 +173,8 @@ class RefundWorkflow:
         # EXECUTION STATE: the approval Signal is persisted in Event History.
         self.approval_note = note
         self.approved = True
+
+    @workflow.signal
+    def release(self) -> None:
+        # EXECUTION STATE: lets a held run finish once the restart has been shown.
+        self.released = True

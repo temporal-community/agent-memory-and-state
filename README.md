@@ -185,6 +185,38 @@ Python does not reload a running Worker.
 uv run refund-worker
 ```
 
+### Run it end to end (real Stripe, two panes)
+
+The whole stage flow: real Stripe test mode with the live two-pane view. Needs
+`STRIPE_API_KEY=sk_test_...` in `.env`. Four terminals:
+
+```bash
+# Terminal 1: Temporal
+temporal server start-dev --db-filename .demo-state/temporal.db
+
+# Terminal 2: the Worker, with a restart window open for the effect beat
+EFFECT_RESTART_WINDOW_SECONDS=30 uv run refund-worker
+
+# Terminal 3: the two-pane view
+uv run refund-demo watch stripe-refund-demo
+
+# Terminal 4: drive it
+uv run refund-demo start --real --seed --workflow-id stripe-refund-demo
+uv run refund-demo approve stripe-refund-demo "approved"   # only if it escalates
+# watch Terminal 2 for: restart window open 30s; run: refund-demo kill-worker
+uv run refund-demo kill-worker                             # THE AGENT goes LOST
+uv run refund-demo inspect stripe-refund-demo
+# in Terminal 2, rerun the same command to recover the Worker; it drives attempt 2
+uv run refund-demo result stripe-refund-demo               # waits for the Worker, then one refund
+uv run refund-demo cleanup                                 # net Stripe to zero
+```
+
+In real mode the watch panel shows the refund itself: its id, the call count, and
+that it stays one refund with no duplicate. Stripe is still the system of record,
+so the dashboard is where you confirm the money actually moved. To rehearse
+offline, drop the restart window and swap `--real --seed` for `--dry-run`. The
+sections below break down each step.
+
 ### Run a refund
 
 Terminal 3:
@@ -223,26 +255,28 @@ the refund, before the Activity can report it completed, the worker loses its
 connection or is restarted (a deploy, a network blip, a timeout). Now nothing in
 the process can tell you whether the money moved. Two things make this beat work,
 and both are easy to miss: the Worker must run with a restart window open, and
-you have to kill it during that window. Keep it in dry-run; the idempotency is
-identical to real Stripe, with no test charge to reconcile after. Stop the
-Worker, then start it with the window held open:
+you have to kill it during that window. This runs against real Stripe test mode,
+so you watch one refund resolve in the dashboard despite two attempts, and it is
+self-contained (its own Workflow, no earlier step needed). Stop the Worker, then
+start it with the window held open:
 
 ```bash
 EFFECT_RESTART_WINDOW_SECONDS=30 uv run refund-worker
 ```
 
-Start a refund and let it reach the refund step. Approve it if it escalates:
+Start a seeded real refund and let it reach the refund step. Approve if it
+escalates:
 
 ```bash
-uv run refund-demo start --dry-run --workflow-id demo-restart
+uv run refund-demo start --real --seed --workflow-id demo-restart
 uv run refund-demo approve demo-restart "approved"   # only if it escalates
 ```
 
-Wait for the Worker to print:
+Wait for the Worker to print the cue:
 
 ```text
-THE SYSTEM | { "stripe_accepted": true, ... }
-EXECUTION STATE | { "restart_window": "open", ... }
+THE SYSTEM      | refund accepted at Stripe: re_... (stripe-test, attempt 1)
+EXECUTION STATE | restart window open 30s; run: refund-demo kill-worker
 ```
 
 At that moment the refund has been accepted but the Activity has not reported
@@ -253,16 +287,21 @@ version of a restart or partition at the worst possible moment:
 uv run refund-demo kill-worker
 ```
 
-Inspect the ambiguous point with no Worker running. The ledger already holds one
-refund, but Temporal does not yet know the Activity result:
+Inspect the ambiguous point with no Worker running. The refund is already created
+at Stripe, but Temporal does not yet know the Activity result:
 
 ```bash
 uv run refund-demo inspect demo-restart
 ```
 
-Restart the Worker with the same window open. After the heartbeat timeout,
-Temporal runs attempt 2, which reuses the same idempotency key derived from the
-workflow run's durable identity, so the ledger resolves to one refund:
+Recover the Worker by restarting it: rerun the same `refund-worker` command, in
+its own terminal. `kill-worker` only kills the process; bringing it back is a
+separate command you run. The returning Worker is what drives the run: after the
+heartbeat timeout Temporal runs attempt 2, which reuses the same idempotency key
+derived from the workflow run's durable identity, so Stripe returns the original
+refund and it resolves to one. `result` does not drive anything; it waits for a
+Worker to finish the run and then prints the outcome, so run it once the Worker
+is back:
 
 ```bash
 EFFECT_RESTART_WINDOW_SECONDS=30 uv run refund-worker
@@ -278,7 +317,55 @@ name. Durable execution does not create exactly-once effects; it lets a retry
 ask instead of guess.
 
 Keep the window under 60, the `issue_refund` start_to_close timeout, so a
-Worker you do not restart cannot time out its own attempt.
+Worker you do not restart cannot time out its own attempt. You have up to the
+schedule_to_close budget (10 minutes) to bring a Worker back before the run gives
+up, so a slow restart on stage still resumes to one refund. To rehearse offline,
+swap `--real --seed` for `--dry-run` and the same beat runs against the local
+ledger with no Stripe calls. After a real run, reconcile the seeded charge with
+`uv run refund-demo cleanup`.
+
+Two things that trip people up. `result` is a read, not a driver: it blocks until
+a Worker has run the Workflow to completion, so if it hangs, no Worker is polling
+and you just need to start one. And use a fresh `--workflow-id` for each run: do
+not resume a run started under older code or before a Temporal restart, because
+replaying it can wedge. Terminate a stale run with `refund-demo stop <id>` and
+start a new id.
+
+### The clean case: replay skips a completed step
+
+The effect beat above stages the hard case, where the crash lands mid-call and
+the idempotency key is what prevents the duplicate. The common case is simpler
+and worth showing: once a step has completed and been recorded, a restart
+replays it from history and does not run it again. No key needed, because the
+step never repeats.
+
+Run a plain Worker (no restart window) and start a run that holds open right
+after the refund is recorded:
+
+```bash
+uv run refund-worker
+uv run refund-demo start --dry-run --hold --workflow-id demo-hold
+```
+
+The Worker prints `refund recorded; holding for release`. Kill and restart it:
+
+```bash
+uv run refund-demo kill-worker
+uv run refund-worker
+```
+
+Watch or inspect while it is held: `issue_refund` shows one call, attempt 1. The
+restart did not retry it, because the completed step was replayed from history,
+not repeated. Release the run to finish:
+
+```bash
+uv run refund-demo release demo-hold
+uv run refund-demo result demo-hold
+```
+
+State stops the redo when the step is recorded; the idempotency key is the
+backstop for the gap where it is not. This runs on the local ledger; swap
+`--dry-run` for `--real --seed` to hold a real refund open, then `cleanup`.
 
 ### The two-panel view
 
@@ -289,11 +376,12 @@ uv run refund-demo watch demo-restart
 ```
 
 The left panel is the Worker's in-process view: context, the steps it retrieved
-this run, and the decision. It reads LOST the moment the Worker is killed,
-because that panel is the Worker's live view. The right panel is status, the
-beats, the pending Activity and its attempt, and the refund record, all read
-from Temporal and the ledger. Those survive the restart, and Temporal replays
-the recorded steps so the run resumes when a Worker returns. Make the terminal
+this run, and the decision. It reads LOST the moment the Worker is killed. When a
+Worker returns and resumes the effect, the panel repopulates from the recovered
+steps, so you watch it come back. The right panel is status, the recorded steps,
+the pending Activity and its attempt, and the refund: its id, how many calls the
+idempotency key took, and that it stays one refund with no duplicate. Both read
+from Temporal and the ledger, so they survive the restart. Make the terminal
 fullscreen for stage. Press Ctrl+C to exit.
 
 ### Real Stripe test mode
@@ -308,9 +396,9 @@ A refund needs a paid PaymentIntent to refund against. The simplest path seeds
 one and refunds it in a single command, so there is no id to copy:
 
 ```bash
-uv run refund-demo start --real --seed --workflow-id real-refund
-uv run refund-demo approve real-refund "approved"   # only if it escalates
-uv run refund-demo result real-refund
+uv run refund-demo start --real --seed --workflow-id stripe-refund-demo
+uv run refund-demo approve stripe-refund-demo "approved"   # only if it escalates
+uv run refund-demo result stripe-refund-demo
 ```
 
 `--seed` creates a succeeded test charge (with the pm_card_visa test card) and
