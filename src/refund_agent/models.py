@@ -14,6 +14,10 @@ class RefundRequest:
     amount_cents: int
     reason: str
     dry_run: bool
+    # When set, hold the run open after the refund is issued (a durable wait) so
+    # a Worker can be killed and restarted to show replay skipping a step that is
+    # already recorded, rather than repeating it.
+    hold_after_effect: bool = False
 
 
 @dataclass(frozen=True)

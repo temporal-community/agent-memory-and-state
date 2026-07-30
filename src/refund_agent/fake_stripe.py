@@ -20,7 +20,10 @@ def idempotency_key_for(workflow_id: str) -> str:
 
 
 def ledger_path() -> Path:
-    return state_dir() / "dry-run-stripe.json"
+    # A local record of the effect, so the stage viewer can show one refund and
+    # its call count in either mode. In dry-run it stands in for Stripe; in real
+    # mode it mirrors what Stripe already owns, purely for the panel.
+    return state_dir() / "effect-ledger.json"
 
 
 def _read_ledger(path: Path) -> dict[str, Any]:
@@ -68,6 +71,45 @@ def create_refund(
         refund = {
             "refund_id": refund_id,
             "status": "succeeded",
+            "workflow_id": workflow_id,
+            "payment_intent_id": payment_intent_id,
+            "amount_cents": amount_cents,
+            "idempotency_key": idempotency_key,
+            "calls": 1,
+        }
+        refunds[idempotency_key] = refund
+        _write_ledger(path, ledger)
+        return dict(refund)
+
+
+def record_effect(
+    *,
+    workflow_id: str,
+    refund_id: str,
+    status: str,
+    amount_cents: int,
+    payment_intent_id: str,
+    idempotency_key: str,
+) -> dict[str, Any]:
+    """Record a real refund locally so the panel can show it.
+
+    Keyed by the idempotency key, so a retry after a restart increments the
+    call count against the same stored refund instead of adding a second one.
+    Stripe is still the system of record; this is only what the panel reads.
+    """
+
+    path = ledger_path()
+    with _LOCK:
+        ledger = _read_ledger(path)
+        refunds = ledger.setdefault("refunds", {})
+        existing = refunds.get(idempotency_key)
+        if existing is not None:
+            existing["calls"] += 1
+            _write_ledger(path, ledger)
+            return dict(existing)
+        refund = {
+            "refund_id": refund_id,
+            "status": status,
             "workflow_id": workflow_id,
             "payment_intent_id": payment_intent_id,
             "amount_cents": amount_cents,

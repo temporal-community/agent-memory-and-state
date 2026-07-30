@@ -19,7 +19,7 @@ from openai import OpenAI
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
-from refund_agent.fake_stripe import create_refund, idempotency_key_for
+from refund_agent.fake_stripe import create_refund, idempotency_key_for, record_effect
 from refund_agent.models import (
     AgentStep,
     CustomerHistory,
@@ -111,12 +111,15 @@ def lookup_order(order_id: str) -> OrderDetails:
 
     order = OrderDetails(
         order_id=order_id,
-        item="trail shoes",
+        item="plush python",
         amount_cents=8000,
         status="delivered",
         purchased_at="2026-06-03",
     )
-    _line("MEMORY", {"tool": TOOL_ORDER, "result": asdict(order)})
+    _line(
+        "MEMORY",
+        f"lookup_order: {order.item}, ${order.amount_cents / 100:.2f}, {order.status}",
+    )
     return order
 
 
@@ -128,13 +131,17 @@ def lookup_customer_history(customer_id: str) -> CustomerHistory:
         customer_id=customer_id,
         account_tenure_days=824,
         purchases=[
-            "2026-06-03, trail shoes, 12900 cents",
-            "2026-02-14, running jacket, 8900 cents",
-            "2025-11-20, water bottle, 2400 cents",
+            "2026-06-03, plush python, 8000 cents",
+            "2026-02-14, mechanical keyboard, 8900 cents",
+            "2025-11-20, rubber duck, 2400 cents",
         ],
-        prior_refunds=["2025-08-09, socks, 1800 cents, approved"],
+        prior_refunds=["2025-08-09, laptop stickers, 1800 cents, approved"],
     )
-    _line("MEMORY", {"tool": TOOL_HISTORY, "result": asdict(history)})
+    _line(
+        "MEMORY",
+        f"lookup_customer_history: {history.account_tenure_days} days, "
+        f"{len(history.prior_refunds)} prior",
+    )
     return history
 
 
@@ -148,7 +155,7 @@ def check_refund_policy(order_id: str) -> ReturnStatus:
         received_back=False,
         note="no return on file",
     )
-    _line("MEMORY", {"tool": TOOL_POLICY, "result": asdict(status)})
+    _line("MEMORY", f"check_refund_policy: {status.note}")
     return status
 
 
@@ -343,7 +350,11 @@ def agent_step(request: RefundRequest, working_memory: list[dict]) -> AgentStep:
         view.clear()
         view["context"] = asdict(request)
         print("=" * 64, flush=True)
-        _line("CONTEXT", asdict(request))
+        _line(
+            "CONTEXT",
+            f"refund request {request.request_id}: order {request.order_id}, "
+            f"${request.amount_cents / 100:.2f}, customer {request.customer_id}",
+        )
 
     # The model is real whenever a key is present, independent of the Stripe
     # mode. This lets the loop run with a real model in dry-run (no Stripe key
@@ -376,7 +387,7 @@ def agent_step(request: RefundRequest, working_memory: list[dict]) -> AgentStep:
     else:
         _line("MODEL REASONING", f"turn {turn}: plan -> call {step.tool}")
     _mirror_agent_view(workflow_id, view)
-    _line("THE AGENT", f"in process, lost on restart: {_agent_summary(view)}")
+    _line("THE AGENT", f"in process: {_agent_summary(view)}")
     return step
 
 
@@ -412,7 +423,11 @@ def _real_stripe_refund(
 
 
 @activity.defn
-def issue_refund(request: RefundRequest, decision: RefundDecision) -> RefundResult:
+def issue_refund(
+    request: RefundRequest,
+    decision: RefundDecision,
+    working_memory: list[dict] | None = None,
+) -> RefundResult:
     """EXTERNAL EFFECT: issue one idempotency-keyed refund."""
 
     info = activity.info()
@@ -430,17 +445,26 @@ def issue_refund(request: RefundRequest, decision: RefundDecision) -> RefundResu
     # run's effect.
     run_id = info.workflow_run_id
     idempotency_key = idempotency_key_for(f"{workflow_id}:{run_id}")
+
+    # Rebuild THE AGENT view from the recovered steps, so a Worker resuming this
+    # effect after a restart repopulates its in-process panel instead of staying
+    # blank. Temporal restored working_memory by replay; this only shows it.
+    if working_memory is None:
+        working_memory = []
+    view = _view_for(workflow_id)
+    view["context"] = asdict(request)
+    view["observations"] = working_memory
+    view["decision"] = {
+        "recommendation": decision.recommendation,
+        "rationale": decision.rationale,
+        "source": decision.source,
+    }
+    _mirror_agent_view(workflow_id, view)
+
     _line(
         "EXECUTION STATE",
-        {
-            "phase": "issuing_refund",
-            "workflow_id": workflow_id,
-            "run_id": run_id,
-            "activity_id": info.activity_id,
-            "activity_attempt": info.attempt,
-            "decision": asdict(decision),
-            "idempotency_key": idempotency_key,
-        },
+        f"issuing refund: attempt {info.attempt}, decision "
+        f"{decision.recommendation}, idempotency key ...{idempotency_key[-8:]}",
     )
 
     if request.dry_run:
@@ -472,28 +496,28 @@ def issue_refund(request: RefundRequest, decision: RefundDecision) -> RefundResu
                 non_retryable=True,
             ) from error
         mode = "stripe-test"
+        # Mirror the real refund locally so the panel can show one refund and
+        # its call count. Stripe stays the system of record.
+        record_effect(
+            workflow_id=workflow_id,
+            refund_id=str(effect["refund_id"]),
+            status=str(effect["status"]),
+            amount_cents=int(effect["amount_cents"]),
+            payment_intent_id=request.payment_intent_id,
+            idempotency_key=idempotency_key,
+        )
 
     _line(
         "THE SYSTEM",
-        {
-            "stripe_accepted": True,
-            "refund_id": effect["refund_id"],
-            "status": effect["status"],
-            "idempotency_key": idempotency_key,
-            "activity_attempt": info.attempt,
-            "mode": mode,
-        },
+        f"refund accepted at Stripe: {effect['refund_id']} "
+        f"({mode}, attempt {info.attempt})",
     )
 
     restart_window = effect_restart_window_seconds()
     if info.attempt == 1 and restart_window > 0:
         _line(
             "EXECUTION STATE",
-            {
-                "restart_window": "open",
-                "seconds": restart_window,
-                "instruction": "run refund-demo kill-worker now",
-            },
+            f"restart window open {restart_window:.0f}s; run: refund-demo kill-worker",
         )
         # This pause is intentionally after the effect and before completion.
         # Heartbeats keep attempt 1 alive until the process is actually killed.
@@ -501,6 +525,16 @@ def issue_refund(request: RefundRequest, decision: RefundDecision) -> RefundResu
         while time.monotonic() < deadline:
             activity.heartbeat("effect accepted, result not reported")
             time.sleep(min(1.0, max(0.0, deadline - time.monotonic())))
+
+    if request.hold_after_effect and info.attempt == 1:
+        # The clean beat: the refund is recorded, then the run holds open (a
+        # durable wait in the Workflow). Kill and restart the Worker now; replay
+        # sees this step already done and does not repeat it. Then release.
+        _line(
+            "EXECUTION STATE",
+            "refund recorded; holding for release. kill-worker now, restart, "
+            f"then: refund-demo release {workflow_id}",
+        )
 
     return RefundResult(
         refund_id=str(effect["refund_id"]),

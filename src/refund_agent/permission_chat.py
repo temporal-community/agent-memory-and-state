@@ -16,14 +16,14 @@ Two views:
                              the right
 
 Presenter commands (either view):
-  :new           start a fresh session (clears context, like reopening the chat)
+  :new           fresh session: clear the chat and this session's context
   :remember on   turn the memory layer on (facts persist across sessions)
   :remember off  turn the memory layer off
   :state on      record the authorization in the auth system (authoritative)
   :state off     stop recording in the auth system
   :authorize     set the authorization active (allowed) in the real world
   :revoke        revoke push access in the real world (out of band)
-  :reset         clear all layers and start over
+  :reset         clear the chat and all layers, start over
   :layers        print the layers now (plain view only)
   :help          show the commands
   :quit          exit
@@ -299,7 +299,7 @@ def _panes_frame(world: World, transcript: list[tuple[str, str]]):
     )
     layout["head"].update(
         Panel(
-            "GitHub push permission (authorization state)    may the agent push?",
+            "Alternative Demo: GitHub Push Permission",
             border_style="cyan",
         )
     )
@@ -339,6 +339,10 @@ def run_panes() -> None:
             keep, note = apply_command(line, world)
             if not keep:
                 break
+            if line.lower() in (":reset", ":new"):
+                # Reset and new both clear the chat (a fresh window), not just
+                # the layers.
+                transcript.clear()
             if note:
                 transcript.append(("system", note))
             continue
