@@ -30,6 +30,7 @@ from refund_agent.models import (
     ReturnStatus,
 )
 from refund_agent.settings import (
+    agent_view_path,
     effect_restart_window_seconds,
     state_dir,
     validate_stripe_key,
@@ -80,8 +81,12 @@ def _mirror_agent_view(workflow_id: str | None, view: dict[str, object]) -> None
         return
     directory = state_dir()
     directory.mkdir(parents=True, exist_ok=True)
-    path = directory / f"agent-view-{workflow_id}.json"
-    path.write_text(json.dumps(view, indent=2, sort_keys=True), encoding="utf-8")
+    path = agent_view_path(workflow_id)
+    temporary_path = path.with_suffix(".tmp")
+    temporary_path.write_text(
+        json.dumps(view, indent=2, sort_keys=True), encoding="utf-8"
+    )
+    os.replace(temporary_path, path)
 
 
 def _agent_summary(view: dict[str, object]) -> str:
@@ -498,14 +503,21 @@ def issue_refund(
         mode = "stripe-test"
         # Mirror the real refund locally so the panel can show one refund and
         # its call count. Stripe stays the system of record.
-        record_effect(
-            workflow_id=workflow_id,
-            refund_id=str(effect["refund_id"]),
-            status=str(effect["status"]),
-            amount_cents=int(effect["amount_cents"]),
-            payment_intent_id=request.payment_intent_id,
-            idempotency_key=idempotency_key,
-        )
+        try:
+            record_effect(
+                workflow_id=workflow_id,
+                refund_id=str(effect["refund_id"]),
+                status=str(effect["status"]),
+                amount_cents=int(effect["amount_cents"]),
+                payment_intent_id=request.payment_intent_id,
+                idempotency_key=idempotency_key,
+            )
+        except ValueError as error:
+            raise ApplicationError(
+                str(error),
+                type="IdempotencyConflict",
+                non_retryable=True,
+            ) from error
 
     _line(
         "THE SYSTEM",

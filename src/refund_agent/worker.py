@@ -46,11 +46,11 @@ async def run_worker() -> None:
         flush=True,
     )
 
-    client = await Client.connect(
-        temporal_address(),
-        namespace=temporal_namespace(),
-    )
     try:
+        client = await Client.connect(
+            temporal_address(),
+            namespace=temporal_namespace(),
+        )
         # The Activities use blocking SDKs, so the Temporal skill recommends
         # synchronous Activities with an explicit thread executor.
         with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:

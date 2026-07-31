@@ -15,6 +15,7 @@ dependencies = [
 [package.optional-dependencies]
 dev = [
     { name = "pytest" },
+    { name = "rich" },
     { name = "ruff" },
 ]
 tui = [
@@ -25,6 +26,7 @@ tui = [
 requires-dist = [
     { name = "openai", specifier = ">=2.0,<3" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8,<10" },
+    { name = "rich", marker = "extra == 'dev'", specifier = ">=13,<15" },
     { name = "rich", marker = "extra == 'tui'", specifier = ">=13,<15" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.12,<1" },
     { name = "stripe", specifier = ">=14,<15" },
