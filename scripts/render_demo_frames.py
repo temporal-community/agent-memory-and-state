@@ -49,42 +49,42 @@ def _system_panel(
     attempt: int | None = None,
 ) -> Panel:
     body = Text()
-    body.append(f"status  {status}\n", style="bold green")
-    body.append(f"phase   {phase}\n\n")
-    body.append("steps\n", style="bold green")
-    body.append("  tools used      lookup_order, lookup_customer_history\n")
+    body.append("EXECUTION STATE — owner: Temporal\n", style="bold green")
+    body.append(f"  status  {status}\n")
+    body.append(f"  phase   {phase}\n\n")
+    body.append("  recorded progress\n", style="bold green")
+    body.append("  agent tools     2 recorded\n")
     body.append("  human approval  not needed (auto)\n")
     body.append(
         f"  refund issued   {'done' if status == 'COMPLETED' else 'pending'}\n\n"
     )
-    body.append("pending activity\n", style="bold green")
+    body.append("  pending activity\n", style="bold green")
     if attempt is None:
         body.append("  none\n\n")
     else:
         body.append(f"  issue_refund attempt {attempt}\n\n")
-    body.append("refund (idempotency-keyed)\n", style="bold green")
+    body.append("EFFECT STATE — owner: demo ledger\n", style="bold green")
     if calls is None:
         body.append("  none yet\n", style="dim")
     else:
         body.append(
             "  refund id  re_dry_8f31b465af82c0d1\n"
             "  status     succeeded\n"
-            f"  calls      {calls}\n"
-            "  unique     1 (no duplicate)\n"
+            f"  calls {calls}  |  unique refunds 1\n"
         )
         if calls > 1:
             body.append(
-                "  same key reused: Stripe returned the same refund\n",
+                "  same key reused; same refund returned\n",
                 style="green",
             )
         else:
             body.append(
-                "  effect accepted; result not recorded by Temporal yet\n",
+                "  effect accepted; completion unrecorded\n",
                 style="yellow",
             )
     return Panel(
         body,
-        title="THE SYSTEM OF RECORD (Temporal + Stripe, durable)",
+        title="STATE (durable systems of record)",
         border_style="green",
     )
 
@@ -95,7 +95,7 @@ def _waiting_system_panel() -> Panel:
     body.append(f"no execution named {WORKFLOW_ID} yet", style="dim")
     return Panel(
         body,
-        title="THE SYSTEM OF RECORD (Temporal + Stripe, durable)",
+        title="STATE (durable owners)",
         border_style="green",
     )
 
@@ -113,7 +113,7 @@ def _render_naive_frames(output_dir: Path) -> None:
     }
     active_agent = {
         "context": {"order": "1234", "amount": 8000, "customer": "42"},
-        "memory": {"tenure_days": 824, "prior_refunds": 0},
+        "memory": {"tenure_days": 824, "prior_refunds": 1},
         "recorded": True,
         "note": "issued re_naive_4f31a3c1, recorded 'done' in its own process",
     }
@@ -182,7 +182,7 @@ def _render_durable_frames(output_dir: Path) -> None:
                     lost_agent,
                     _system_panel(
                         status="RUNNING",
-                        phase="issuing refund (external effect)",
+                        phase="refund effect in flight",
                         calls=1,
                         attempt=1,
                     ),
@@ -204,7 +204,7 @@ def _render_durable_frames(output_dir: Path) -> None:
                     ),
                 ),
                 output_dir / "07-durable-recovered.html",
-                title="Durable demo — recovered exactly once",
+                title="Durable demo — recovered to one refund",
             )
     finally:
         tui._worker_alive = original_worker_alive

@@ -109,10 +109,12 @@ class RefundWorkflow:
             )
 
         # EXTERNAL EFFECT: retries reuse one Stripe idempotency key.
+        heartbeat_timeout = timedelta(seconds=3 if request.fast_recovery else 15)
+        start_to_close_timeout = timedelta(minutes=6 if request.fast_recovery else 1)
         result = await workflow.execute_activity(
             issue_refund,
             args=[request, decision, self.working_memory],
-            start_to_close_timeout=timedelta(minutes=1),
+            start_to_close_timeout=start_to_close_timeout,
             # Schedule-to-close is the total recovery window: how long the Worker
             # may be gone before Temporal gives up on the effect and fails the
             # run. Kept generous so a slow restart on stage still resumes to one
@@ -121,7 +123,7 @@ class RefundWorkflow:
             # Heartbeat timeout is the worker-loss detection window. It must exceed
             # the real Stripe call latency so a slow network call is not mistaken
             # for a dead Worker, while staying short enough to detect a real loss.
-            heartbeat_timeout=timedelta(seconds=15),
+            heartbeat_timeout=heartbeat_timeout,
             retry_policy=RetryPolicy(
                 initial_interval=timedelta(seconds=1),
                 maximum_interval=timedelta(seconds=3),

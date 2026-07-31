@@ -16,11 +16,11 @@ work stands and who may act, owned by a system of record outside the model, not
 held in the agent's memory.
 
 - **naive-refund** (Demo 1): the refund task built the naive way, with no durable
-  execution. On a restart, context and memory come back for free, but the lost
-  process-local state makes it refund a second time.
+  execution. This fixture can rebuild its context and retrieve the same facts,
+  but lost local progress makes it refund a second time.
 - **the refund agent** (Demo 2): the same task made durable. It retrieves what it
   needs, reasons, decides, and issues a Stripe refund in test mode, and it
-  survives the same restart and refunds exactly once.
+  survives the same restart with one committed Stripe refund.
 - **permission-chat** (alternative): the authorization companion. The same
   memory-and-state layers around a GitHub push permission, whose system of
   record is the auth system, not Temporal.
@@ -60,6 +60,17 @@ calls carry one idempotency key and resolve to the same refund:
 ![The durable demo showing two calls and one unique refund after recovery](assets/durable-recovered.png)
 
 ## Memory and state
+
+The demos use three operational roles, without requiring a philosophical ruling
+on whether state is a kind of memory:
+
+- **Context** is what the model sees for this decision.
+- **Memory** is what the agent retrieves or recalls to help make the decision.
+- **State** is what the application must not guess: progress and external facts
+  recorded by the systems that own them.
+
+The same data can cross these boundaries. The useful question is not what to
+call the bytes, but which record wins when two copies disagree.
 
 Both memory and state can be durable, so durability is not the difference. Each
 is authoritative, but over a different domain: memory over what the agent
@@ -157,6 +168,33 @@ refund, which is the simplest way to run the whole loop locally.
 | `TEMPORAL_ADDRESS` `TEMPORAL_NAMESPACE` `TEMPORAL_TASK_QUEUE` | Temporal connection. |
 | `DEMO_STATE_DIR` | Where local state and the offline ledger live. |
 
+## One-window talk path (recommended)
+
+Run the complete comparison from one fullscreen terminal:
+
+```bash
+uv run refund-demo stage
+```
+
+The stage runner guides every beat with Enter: naive request, real process crash,
+naive restart and duplicate, then the same request through Temporal, a hard
+Worker kill at the uncertain effect boundary, and recovery to two calls but one
+refund. It starts a local Temporal dev server only when one is not already
+reachable, owns a private task queue and Worker, and shuts down only the
+processes it started. No terminal switching or timed command copying is needed.
+
+The default is deliberately deterministic and offline. For the Stripe test-mode
+version, with `STRIPE_API_KEY=sk_test_...` in `.env`:
+
+```bash
+uv run refund-demo stage --real
+```
+
+Add `--real-model` when live model variability is part of the presentation.
+Otherwise the deterministic policy keeps the talk focused on recovery rather
+than model latency. Each run keeps its Worker and Temporal logs in a private
+`.demo-state/stage-*` directory for rehearsal debugging.
+
 ## Demo 1: the naive refund agent (no durable execution)
 
 The same refund task as Demo 2, built the naive way: everything, including the
@@ -167,23 +205,25 @@ two-pane window (needs the `tui` extra):
 uv run naive-refund
 ```
 
-The left pane is THE AGENT (in process): context, memory, and process-local
-state, the ghost band the restart loses.
-The right pane is THE RECORD, the durable ledger of committed refunds. Drive it:
+The left pane separates context, retrieved memory, and local progress with no
+durable owner. The right pane is effect state: the durable ledger of committed
+refunds. Drive it:
 
 - Press Enter (or type `refund`) to process the refund. The agent decides,
   refunds, and records completion; the ledger shows one refund.
-- Type `restart` to restart the worker, the everyday event: a deploy, a rolling
-  restart, an eviction, an OOM. THE AGENT pane goes to LOST: its in-memory state
-  is gone, including whether it already refunded. The ledger still shows one.
-- Press Enter again. Context and memory come back for free (they are
-  recomputable), but with no durable record that it refunded, it refunds a
-  second time and the ledger shows a DUPLICATE REFUND.
+- Type `restart` to simulate losing the worker, the everyday event behind a
+  deploy, rolling restart, eviction, or OOM. Its in-memory view is gone,
+  including whether it already refunded. The ledger still shows one.
+- Press Enter again. This fixture rebuilds the request context and retrieves the
+  same customer facts, but with no durable progress record it refunds a second
+  time and the ledger shows a DUPLICATE REFUND.
 - `reset` starts over, `quit` exits.
 
-The point: knowledge is recomputable, so losing it on a restart is cheap.
-Process-local state is not, and losing it is what refunds the customer twice. This is
-not an exotic crash: it is what happens on any deploy or eviction mid-task.
+The point is not that memory is cheap to lose. It is that reconstructing the
+same decision inputs does not prove whether the prior effect committed. Local
+progress is not an authoritative record, and losing it is what refunds the
+customer twice. This is not an exotic crash: it is what happens on any deploy
+or eviction at the wrong boundary.
 Demo 2 is the same agent with its execution state in a system of record
 (Temporal), where the same restart resolves to one refund.
 
@@ -219,10 +259,11 @@ Python does not reload a running Worker.
 uv run refund-worker
 ```
 
-### Run it end to end (real Stripe, two panes)
+### Manual multi-terminal path (advanced/debugging)
 
-The whole stage flow: real Stripe test mode with the live two-pane view. Needs
-`STRIPE_API_KEY=sk_test_...` in `.env`. Four terminals:
+The commands below expose every component separately for development and
+debugging. For a talk, prefer `refund-demo stage`. The manual real Stripe path
+needs `STRIPE_API_KEY=sk_test_...` in `.env` and four terminals:
 
 ```bash
 # Terminal 1: Temporal
@@ -238,7 +279,7 @@ uv run refund-demo watch stripe-refund-demo
 uv run refund-demo start --real --seed --workflow-id stripe-refund-demo
 uv run refund-demo approve stripe-refund-demo "approved"   # only if it escalates
 # watch Terminal 2 for: restart window open 30s; run: refund-demo kill-worker
-uv run refund-demo kill-worker                             # THE AGENT goes LOST
+uv run refund-demo kill-worker                             # Worker view goes LOST
 uv run refund-demo inspect stripe-refund-demo
 # in Terminal 2, rerun the same command to recover the Worker; it drives attempt 2
 uv run refund-worker
@@ -404,20 +445,19 @@ backstop for the gap where it is not. This runs on the local ledger; swap
 
 ### The two-panel view
 
-In its own terminal, watch THE AGENT beside THE SYSTEM OF RECORD:
+In its own terminal, watch context and memory beside authoritative state:
 
 ```bash
 uv run refund-demo watch demo-restart
 ```
 
-The left panel is the Worker's in-process view: context, the steps it retrieved
-this run, and the decision. It reads LOST the moment the Worker is killed. When a
-Worker returns and resumes the effect, the panel repopulates from the recovered
-steps, so you watch it come back. The right panel is status, the recorded steps,
-the pending Activity and its attempt, and the refund: its id, how many calls the
-idempotency key took, and that it stays one refund with no duplicate. Both read
-from Temporal and the ledger, so they survive the restart. Make the terminal
-fullscreen for stage. Press Ctrl+C to exit.
+The left panel is the Worker's in-process decision view: current context,
+retrieved memory, and the decision. It reads LOST the moment the Worker is
+killed. When a Worker returns and resumes the effect, the panel repopulates from
+replayed execution. The right panel separates execution state owned by Temporal
+from effect state owned by Stripe: recorded steps, pending Activity attempt,
+refund id, call count, and one unique refund. Make the terminal fullscreen for
+stage. Press Ctrl+C to exit.
 
 ### Real Stripe test mode
 

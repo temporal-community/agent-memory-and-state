@@ -1,10 +1,10 @@
-"""A stage viewer: THE AGENT beside THE SYSTEM OF RECORD, updating live.
+"""A stage viewer: decision inputs beside authoritative state, updating live.
 
 This is a read-only presentation tool. It never changes Workflow behavior.
 
-THE AGENT panel reflects the Worker's in-process view, which the Worker mirrors
+The left panel reflects the Worker's in-process view, which the Worker mirrors
 to a file. The panel reads as lost the moment the Worker process is gone, so a
-restart blanks it on stage. THE SYSTEM OF RECORD panel is read from Temporal and
+restart blanks it on stage. The state panel is read from Temporal and
 the refund ledger, which survive a restart. That contrast is the point.
 """
 
@@ -32,7 +32,7 @@ from refund_agent.settings import (
 
 
 def _worker_alive() -> tuple[bool, int | None]:
-    # THE AGENT view only exists while its Worker process is alive.
+    # The decision view only exists while its Worker process is alive.
     path = worker_pid_file()
     if not path.exists():
         return False, None
@@ -55,13 +55,17 @@ def _agent_panel(workflow_id: str) -> Panel:
     if not alive:
         body.append("LOST\n\n", style="bold red")
         body.append(
-            "this panel is the Worker's live view.\n"
-            "it dies with the Worker. Temporal keeps the\n"
-            "recorded steps and replays them, so the run\n"
-            "resumes when a Worker returns",
+            "context and retrieved memory were this\n"
+            "Worker's live view. They can be rebuilt.\n\n"
+            "Temporal still owns execution progress;\n"
+            "Stripe still owns the refund outcome.",
             style="red",
         )
-        return Panel(body, title="THE AGENT (in process)", border_style="red")
+        return Panel(
+            body,
+            title="CONTEXT + MEMORY (Worker process)",
+            border_style="red",
+        )
 
     path = agent_view_path(workflow_id)
     view: dict = {}
@@ -73,24 +77,27 @@ def _agent_panel(workflow_id: str) -> Panel:
     if not view:
         body.append("How can I help you?\n\n", style="bold cyan")
         body.append(
-            "waiting for a refund request\n"
-            "the Worker is ready; nothing has been retrieved yet",
+            "waiting for a refund request\nno context assembled; no memory retrieved",
             style="dim",
         )
-        return Panel(body, title="THE AGENT (in process)", border_style="cyan")
+        return Panel(
+            body,
+            title="CONTEXT + MEMORY (Worker process)",
+            border_style="cyan",
+        )
 
     context = view.get("context") or {}
     observations = view.get("observations") or []
     decision = view.get("decision")
 
-    body.append("CONTEXT\n", style="bold cyan")
+    body.append("CONTEXT (model input now)\n", style="bold yellow")
     body.append(
         f"  request  {context.get('request_id')}\n"
         f"  order    {context.get('order_id')}\n"
         f"  customer {context.get('customer_id')}\n"
         f"  amount   {context.get('amount_cents')} cents\n\n"
     )
-    body.append("STEPS RETRIEVED (this run)\n", style="bold cyan")
+    body.append("MEMORY (retrieved for the decision)\n", style="bold blue")
     if observations:
         for obs in observations:
             body.append(f"  {obs.get('tool')}\n")
@@ -104,7 +111,11 @@ def _agent_panel(workflow_id: str) -> Panel:
         )
     else:
         body.append("  not decided yet\n", style="dim")
-    return Panel(body, title="THE AGENT (in process)", border_style="cyan")
+    return Panel(
+        body,
+        title="CONTEXT + MEMORY (Worker process)",
+        border_style="cyan",
+    )
 
 
 def _mark(done: bool) -> str:
@@ -119,7 +130,7 @@ async def _system_panel(client: Client, workflow_id: str) -> Panel:
     except RPCError:
         body.append("waiting for workflow\n\n", style="dim")
         body.append(f"no execution named {workflow_id} yet", style="dim")
-        return Panel(body, title="THE SYSTEM OF RECORD (durable)", border_style="green")
+        return Panel(body, title="STATE (durable owners)", border_style="green")
 
     status = description.status.name if description.status else "UNKNOWN"
     history = await handle.fetch_history()
@@ -127,27 +138,29 @@ async def _system_panel(client: Client, workflow_id: str) -> Panel:
     phase = _phase(rows, status)
 
     completed = {r.get("name") for r in rows if r.get("event") == "completed"}
+    scheduled = {r.get("name") for r in rows if r.get("event") == "scheduled"}
     signals = {r.get("name") for r in rows if r.get("event") == "signal"}
 
-    body.append(f"status  {status}\n", style="bold green")
-    body.append(f"phase   {phase}\n\n")
+    body.append("EXECUTION STATE — owner: Temporal\n", style="bold green")
+    body.append(f"  status  {status}\n")
+    body.append(f"  phase   {phase}\n\n")
     tools = [
         name
         for name in ("lookup_order", "lookup_customer_history", "check_refund_policy")
         if name in completed
     ]
-    body.append("steps\n", style="bold green")
-    body.append(f"  tools used      {', '.join(tools) if tools else '(none yet)'}\n")
+    body.append("  recorded progress\n", style="bold green")
+    body.append(f"  agent tools     {len(tools)} recorded\n")
     if "approve" in signals:
         approval = "done"
-    elif status == "COMPLETED":
+    elif "issue_refund" in scheduled or status == "COMPLETED":
         approval = "not needed (auto)"
     else:
         approval = "pending"
     body.append(f"  human approval  {approval}\n")
     body.append(f"  refund issued   {_mark('issue_refund' in completed)}\n\n")
 
-    body.append("pending activity\n", style="bold green")
+    body.append("  pending activity\n", style="bold green")
     pending = list(description.raw_description.pending_activities)
     if pending:
         for item in pending:
@@ -156,31 +169,39 @@ async def _system_panel(client: Client, workflow_id: str) -> Panel:
         body.append("  none\n")
     body.append("\n")
 
-    body.append("refund (idempotency-keyed)\n", style="bold green")
     refund = find_refund(workflow_id)
+    original_refund_id = str(refund.get("refund_id")) if refund else ""
+    effect_owner = (
+        "demo ledger" if original_refund_id.startswith("re_dry_") else "Stripe"
+    )
+    body.append(f"EFFECT STATE — owner: {effect_owner}\n", style="bold green")
     if refund is None:
         body.append("  none yet\n", style="dim")
     else:
         calls = refund.get("calls", 1)
+        refund_id = original_refund_id
+        if len(refund_id) > 20:
+            refund_id = "..." + refund_id[-16:]
         body.append(
-            f"  refund id  {refund.get('refund_id')}\n"
+            f"  refund id  {refund_id}\n"
             f"  status     {refund.get('status')}\n"
-            f"  calls      {calls}\n"
-            "  unique     1 (no duplicate)\n"
+            f"  calls {calls}  |  unique refunds 1\n"
         )
         if calls > 1:
             body.append(
-                "  same key reused: Stripe returned the same refund\n",
+                "  same key reused; same refund returned\n",
                 style="green",
             )
+        elif "issue_refund" in completed:
+            body.append("  completion recorded; replay skips it\n", style="dim")
         else:
             body.append(
-                "  one call; a restart replays this step, not repeats it\n",
+                "  effect accepted; completion unrecorded\n",
                 style="dim",
             )
     return Panel(
         body,
-        title="THE SYSTEM OF RECORD (Temporal + Stripe, durable)",
+        title="STATE (durable systems of record)",
         border_style="green",
     )
 
@@ -190,8 +211,8 @@ def _header(workflow_id: str) -> Panel:
     text.append("Demo 2: Durable Refund Agent", style="bold")
     text.append(f"    workflow {workflow_id}\n", style="dim")
     text.append(
-        "THE AGENT = the Worker's in-process view, dies with the Worker      "
-        "THE SYSTEM OF RECORD = Temporal + Stripe, durable",
+        "CONTEXT + MEMORY help decide.  STATE records what must not be guessed.\n"
+        "Crash question: did the refund commit, and where should execution resume?",
         style="dim",
     )
     return Panel(text, border_style="white")
@@ -200,7 +221,7 @@ def _header(workflow_id: str) -> Panel:
 def _build(workflow_id: str, agent: Panel, system: Panel) -> Layout:
     layout = Layout()
     layout.split_column(
-        Layout(_header(workflow_id), size=4, name="head"),
+        Layout(_header(workflow_id), size=5, name="head"),
         Layout(name="body"),
     )
     layout["body"].split_row(

@@ -208,7 +208,7 @@ def _phase(rows: list[dict[str, object]], status: str) -> str:
     signals = [row.get("name") for row in rows if row.get("event") == "signal"]
     completed = [row.get("name") for row in rows if row.get("event") == "completed"]
     if "issue_refund" in scheduled:
-        return "issuing refund (external effect)"
+        return "refund effect in flight"
     if "approve" in signals:
         return "approved, issuing refund"
     tools = [
@@ -286,7 +286,10 @@ async def _inspect(args: argparse.Namespace) -> None:
         for item in description.raw_description.pending_activities
     ]
 
-    print("THE AGENT | not available here; its view existed only in the Worker process")
+    print(
+        "CONTEXT + MEMORY | not available here; that view existed only in the "
+        "Worker process"
+    )
     print(
         "THE SYSTEM | Temporal\n"
         + _json(
@@ -407,6 +410,24 @@ async def _watch(args: argparse.Namespace) -> None:
     await tui.watch(args.workflow_id)
 
 
+async def _stage(args: argparse.Namespace) -> None:
+    # Lazy import: the regular CLI still works without the optional Rich extra.
+    try:
+        from refund_agent.stage import run
+    except ModuleNotFoundError:
+        print("The stage view needs rich. Install it with: uv sync --extra tui")
+        return
+    try:
+        await run(
+            workflow_id=args.workflow_id,
+            real=args.real,
+            real_model=args.real_model,
+            amount_cents=8000,
+        )
+    except RuntimeError as error:
+        print(f"STAGE | {error}")
+
+
 def _kill_worker() -> None:
     path = worker_pid_file()
     if not path.exists():
@@ -498,9 +519,25 @@ def _parser() -> argparse.ArgumentParser:
     commands.add_parser("kill-worker", help="hard kill the recorded Worker PID")
 
     watch = commands.add_parser(
-        "watch", help="live two panel view of THE AGENT and THE SYSTEM OF RECORD"
+        "watch", help="live view of context and memory beside authoritative state"
     )
     watch.add_argument("workflow_id")
+
+    stage = commands.add_parser(
+        "stage",
+        help="run both demos in one guided terminal (starts and restarts its Worker)",
+    )
+    stage.add_argument("--workflow-id")
+    stage.add_argument(
+        "--real",
+        action="store_true",
+        help="use a seeded Stripe test payment instead of the offline ledger",
+    )
+    stage.add_argument(
+        "--real-model",
+        action="store_true",
+        help="use OPENAI_API_KEY instead of the deterministic stage policy",
+    )
 
     seed = commands.add_parser(
         "seed-payment",
@@ -530,6 +567,8 @@ async def _async_main(args: argparse.Namespace) -> None:
         await _inspect(args)
     elif args.command == "watch":
         await _watch(args)
+    elif args.command == "stage":
+        await _stage(args)
     elif args.command == "seed-payment":
         await _seed_payment(args)
     elif args.command == "cleanup":
