@@ -24,7 +24,7 @@ from temporalio.service import RPCError
 from refund_agent.cli import _event_rows, _phase
 from refund_agent.fake_stripe import find_refund
 from refund_agent.settings import (
-    state_dir,
+    agent_view_path,
     temporal_address,
     temporal_namespace,
     worker_pid_file,
@@ -63,7 +63,7 @@ def _agent_panel(workflow_id: str) -> Panel:
         )
         return Panel(body, title="THE AGENT (in process)", border_style="red")
 
-    path = state_dir() / f"agent-view-{workflow_id}.json"
+    path = agent_view_path(workflow_id)
     view: dict = {}
     if path.exists():
         try:
@@ -71,8 +71,12 @@ def _agent_panel(workflow_id: str) -> Panel:
         except json.JSONDecodeError:
             view = {}
     if not view:
-        body.append("empty\n\n", style="dim")
-        body.append("new process, nothing retrieved yet", style="dim")
+        body.append("How can I help you?\n\n", style="bold cyan")
+        body.append(
+            "waiting for a refund request\n"
+            "the Worker is ready; nothing has been retrieved yet",
+            style="dim",
+        )
         return Panel(body, title="THE AGENT (in process)", border_style="cyan")
 
     context = view.get("context") or {}

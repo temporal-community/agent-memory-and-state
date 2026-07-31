@@ -1,5 +1,7 @@
 """Process settings used outside deterministic Workflow code."""
 
+import hashlib
+import math
 import os
 from pathlib import Path
 
@@ -46,11 +48,25 @@ def worker_pid_file() -> Path:
     return state_dir() / "worker.pid"
 
 
+def agent_view_path(workflow_id: str) -> Path:
+    """Return a filesystem-safe path for one Workflow's presentation mirror."""
+
+    digest = hashlib.sha256(workflow_id.encode("utf-8")).hexdigest()[:24]
+    return state_dir() / f"agent-view-{digest}.json"
+
+
 def effect_restart_window_seconds() -> float:
     raw_value = os.getenv("EFFECT_RESTART_WINDOW_SECONDS", "0")
-    value = float(raw_value)
-    if value < 0:
-        raise RuntimeError("EFFECT_RESTART_WINDOW_SECONDS must be zero or greater")
+    try:
+        value = float(raw_value)
+    except ValueError as error:
+        raise RuntimeError(
+            "EFFECT_RESTART_WINDOW_SECONDS must be a finite number"
+        ) from error
+    if not math.isfinite(value) or value < 0:
+        raise RuntimeError(
+            "EFFECT_RESTART_WINDOW_SECONDS must be a finite number, zero or greater"
+        )
     return value
 
 

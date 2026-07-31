@@ -104,7 +104,16 @@ def record_effect(
         refunds = ledger.setdefault("refunds", {})
         existing = refunds.get(idempotency_key)
         if existing is not None:
+            same_parameters = (
+                existing["workflow_id"] == workflow_id
+                and existing["refund_id"] == refund_id
+                and existing["payment_intent_id"] == payment_intent_id
+                and existing["amount_cents"] == amount_cents
+            )
+            if not same_parameters:
+                raise ValueError("Idempotency key was reused with different parameters")
             existing["calls"] += 1
+            existing["status"] = status
             _write_ledger(path, ledger)
             return dict(existing)
         refund = {

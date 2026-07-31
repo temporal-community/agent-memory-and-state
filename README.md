@@ -25,6 +25,40 @@ held in the agent's memory.
   memory-and-state layers around a GitHub push permission, whose system of
   record is the auth system, not Temporal.
 
+## See the idea in 15 seconds
+
+Both refund demos now start at the same place: an empty agent asking **“How can
+I help you?”**. That keeps the comparison honest. The difference only appears
+after the agent acts and its Worker disappears.
+
+![Animated comparison of the naive and durable refund demos](assets/demo-reel.gif)
+
+[Watch or download the MP4 version](assets/demo-reel.mp4).
+
+The arc is deliberately small:
+
+| Moment | Naive agent | Durable agent |
+| --- | --- | --- |
+| Before the request | Empty process, ready for work | Empty process, ready for work |
+| After the refund call | Remembers “done” only in its process | Temporal records the attempt; Stripe records the effect |
+| Worker disappears | The completion belief disappears | The process view disappears; both records remain |
+| Worker returns | Acts again: **two refunds** | Replays or retries with the same key: **one refund** |
+
+### The same opening
+
+![The durable Stripe demo waiting for a request with the prompt How can I help you](assets/durable-start.png)
+
+### The payoff
+
+The naive process forgets its local completion marker and issues a duplicate:
+
+![The naive demo showing two committed refunds and a duplicate refund warning](assets/naive-duplicate.png)
+
+The durable run may call Stripe twice across the uncertain boundary, but both
+calls carry one idempotency key and resolve to the same refund:
+
+![The durable demo showing two calls and one unique refund after recovery](assets/durable-recovered.png)
+
 ## Memory and state
 
 Both memory and state can be durable, so durability is not the difference. Each
@@ -207,6 +241,7 @@ uv run refund-demo approve stripe-refund-demo "approved"   # only if it escalate
 uv run refund-demo kill-worker                             # THE AGENT goes LOST
 uv run refund-demo inspect stripe-refund-demo
 # in Terminal 2, rerun the same command to recover the Worker; it drives attempt 2
+uv run refund-worker
 uv run refund-demo result stripe-refund-demo               # waits for the Worker, then one refund
 uv run refund-demo cleanup                                 # net Stripe to zero
 ```
@@ -464,6 +499,13 @@ memory. `:help` lists every command.
 uv run --extra dev pytest -q
 uv run --extra dev ruff check .
 uv run --extra dev ruff format --check .
+```
+
+The checked-in screenshots and demo reel come from deterministic Rich layouts.
+Regenerate their HTML source frames with:
+
+```bash
+uv run --extra dev python scripts/render_demo_frames.py
 ```
 
 ## Scope
