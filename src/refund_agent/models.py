@@ -18,6 +18,13 @@ class RefundRequest:
     # a Worker can be killed and restarted to show replay skipping a step that is
     # already recorded, rather than repeating it.
     hold_after_effect: bool = False
+    # The single-window stage runner uses a short Activity heartbeat timeout so
+    # recovery is visible without making an audience wait. Normal and real
+    # Stripe runs keep the more conservative production-shaped timeout.
+    fast_recovery: bool = False
+    # The guided talk path is deterministic by default, even when an OpenAI key
+    # is present. Passing --real-model opts back into live model reasoning.
+    use_canned_agent: bool = False
 
 
 @dataclass(frozen=True)

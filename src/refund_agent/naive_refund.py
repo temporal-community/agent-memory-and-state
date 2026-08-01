@@ -1,8 +1,8 @@
 """Demo 1: a naive refund agent with no durable execution.
 
-Everything lives in the process: context, memory, and the process-local state
-(what it has already done). Knowledge is recomputable, so a restart gets context
-and memory back for free. Process-local state is not, so a restart (a deploy,
+Everything lives in the process: context, retrieved memory, and local progress
+(what it has already done). This demo can rebuild its context and retrieve the
+same facts again. Its progress has no durable owner, so a restart (a deploy,
 eviction, OOM, or crash) between issuing the refund and recording that it
 finished makes the next run refund a second time.
 
@@ -88,17 +88,17 @@ def _refund(args: argparse.Namespace) -> None:
     _state_dir().mkdir(parents=True, exist_ok=True)
 
     print(paint("=" * 64, "dim"))
-    # CONTEXT and MEMORY are recomputable: a restart re-derives them for free.
+    # This demo can rebuild CONTEXT and retrieve the same MEMORY on a new run.
     _line("CONTEXT", f"order {order}, {_money(amount)}, customer cus_demo_42")
     _line("MEMORY", "cus_demo_42: 824 days tenure, 1 prior refund")
 
-    # PROCESS-LOCAL STATE: the naive agent's only record of what it already did is a
+    # LOCAL PROGRESS: the naive agent's only record of what it already did is a
     # local completion marker. A restart before that marker is written erases it.
     if _done_path(order).exists():
-        _line("PROCESS-LOCAL STATE", "completion record found; already refunded, done")
+        _line("LOCAL PROGRESS", "completion record found; already refunded, done")
         return
     _line(
-        "PROCESS-LOCAL STATE",
+        "LOCAL PROGRESS",
         "no completion record; no durable proof this order was refunded",
     )
 
@@ -108,7 +108,7 @@ def _refund(args: argparse.Namespace) -> None:
 
     if args.exit_after_effect:
         _line(
-            "PROCESS-LOCAL STATE",
+            "LOCAL PROGRESS",
             paint("process exits before recording completion", "danger"),
         )
         sys.stdout.flush()
@@ -118,7 +118,7 @@ def _refund(args: argparse.Namespace) -> None:
         json.dumps({"order_id": order, "refund_id": refund_id}) + "\n",
         encoding="utf-8",
     )
-    _line("PROCESS-LOCAL STATE", "recorded completion")
+    _line("LOCAL PROGRESS", "recorded completion")
     count = _refund_count(order)
     if count > 1:
         _line(
@@ -161,13 +161,12 @@ def _reset(_args: argparse.Namespace) -> None:
 
 
 def _process_interactive(agent: dict, ledger: list) -> None:
-    # Context and memory are recomputed every run (recomputable): the request and
-    # the customer lookup can always be re-fetched. Process-local state (whether
-    # this order was already refunded) lives only in this dict, so a restart that
-    # clears it makes the agent refund again.
+    # This fixture can rebuild context and retrieve the same customer facts on
+    # every run. Whether the order was already refunded lives only in this dict,
+    # so a restart that clears it makes the agent refund again.
     order, amount, customer = "1234", 8000, "42"
     agent["context"] = {"order": order, "amount": amount, "customer": customer}
-    agent["memory"] = {"tenure_days": 824, "prior_refunds": 0}
+    agent["memory"] = {"tenure_days": 824, "prior_refunds": 1}
     if agent.get("recorded"):
         agent["note"] = "already refunded (it has that recorded), so it skips"
         return
@@ -188,8 +187,9 @@ def _demo_frame(agent: dict, ledger: list):
         if agent.get("_restarted"):
             left.append(
                 "the worker restarted (deploy, eviction, OOM).\n"
-                "its context is empty; it does not know it\n"
-                "already refunded this order",
+                "context can be rebuilt and memory retrieved,\n"
+                "but no durable progress record says the\n"
+                "refund already happened",
                 style="yellow",
             )
         else:
@@ -201,18 +201,18 @@ def _demo_frame(agent: dict, ledger: list):
         context = agent.get("context") or {}
         memory = agent.get("memory") or {}
         amount = (context.get("amount") or 0) / 100
-        left.append("CONTEXT\n", style="bold yellow")
+        left.append("CONTEXT (model input now)\n", style="bold yellow")
         left.append(
             f"  Customer {context.get('customer')} requested a refund\n"
             f"  for order {context.get('order')}, ${amount:.2f}\n\n"
         )
-        left.append("MEMORY\n", style="bold blue")
+        left.append("MEMORY (retrieved for the decision)\n", style="bold blue")
         left.append(
             f"  looked up customer {context.get('customer')} in the DB:\n"
             f"  {memory.get('tenure_days')} days, "
             f"{memory.get('prior_refunds')} prior refunds\n\n"
         )
-        left.append("PROCESS-LOCAL STATE\n", style="bold green")
+        left.append("LOCAL PROGRESS (no durable owner)\n", style="bold red")
         if agent.get("recorded"):
             left.append(f"  {agent.get('note')}\n")
         else:
@@ -229,22 +229,28 @@ def _demo_frame(agent: dict, ledger: list):
     if any(count > 1 for count in counts.values()):
         right.append("\nDUPLICATE REFUND\n", style="bold red")
 
-    header = Panel("Demo 1: Naive Refund Agent", border_style="cyan")
+    header_text = Text()
+    header_text.append("Demo 1: Naive Refund Agent\n", style="bold")
+    header_text.append(
+        "CONTEXT + MEMORY help decide. Local progress is the only record of done.",
+        style="dim",
+    )
+    header = Panel(header_text, border_style="cyan")
     why = Panel(
-        "- the check and the act are not atomic, so a retry can act twice\n"
-        "- the record lags (eventual consistency), so a re-check reads stale\n"
-        "- delivery is at-least-once, with no stable key to dedup on",
-        title="why a duplicate happens",
+        "- context and memory can be rebuilt, but neither proves work completed\n"
+        "- local progress disappears, so recovery guesses and acts again\n"
+        "- the effect has no stable identity it can use to deduplicate",
+        title="why state matters",
         border_style="yellow",
     )
     footer = Panel(
         "Enter or a refund request = process    "
-        "agent restart / deploy / OOM    reset    quit",
+        "simulate agent restart / deploy / OOM    reset    quit",
         border_style="dim",
     )
     layout = Layout()
     layout.split_column(
-        Layout(header, name="head", size=3),
+        Layout(header, name="head", size=4),
         Layout(name="body"),
         Layout(why, name="why", size=5),
         Layout(footer, name="foot", size=3),
@@ -253,13 +259,17 @@ def _demo_frame(agent: dict, ledger: list):
         Layout(
             Panel(
                 left,
-                title="THE AGENT (in process)",
+                title="AGENT VIEW (in process)",
                 border_style="cyan",
             ),
             name="agent",
         ),
         Layout(
-            Panel(right, title="THE RECORD (durable ledger)", border_style="green"),
+            Panel(
+                right,
+                title="EFFECT STATE (durable ledger)",
+                border_style="green",
+            ),
             name="world",
         ),
     )

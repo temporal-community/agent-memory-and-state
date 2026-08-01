@@ -365,7 +365,9 @@ def agent_step(request: RefundRequest, working_memory: list[dict]) -> AgentStep:
     # mode. This lets the loop run with a real model in dry-run (no Stripe key
     # needed). Only a real Stripe run with no key fails loudly.
     api_key = os.getenv("OPENAI_API_KEY")
-    if api_key:
+    if request.use_canned_agent:
+        step = _canned_step(request, working_memory)
+    elif api_key:
         step = _openai_step(request, working_memory, api_key)
     elif request.dry_run:
         step = _canned_step(request, working_memory)
