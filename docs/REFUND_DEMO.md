@@ -1,0 +1,329 @@
+# Manual refund demo
+
+The recommended talk path is the guided one-window runner:
+
+```bash
+uv run refund-demo stage
+```
+
+This guide exposes every process and recovery step separately. Use it for
+development, rehearsal, debugging, or a longer technical walkthrough.
+
+## Setup
+
+Prerequisites:
+
+- Python 3.11 or newer
+- [Temporal CLI](https://docs.temporal.io/cli)
+- [uv](https://docs.astral.sh/uv/)
+
+```bash
+uv sync --extra dev --extra tui
+```
+
+Copy `.env.example` to `.env` and fill in only the services you intend to use.
+The Worker and CLI load `.env` automatically. Exported shell values take
+precedence, and configuration is never loaded into deterministic Workflow code.
+
+## Model and effect modes
+
+The model and refund effect are independent:
+
+- With `OPENAI_API_KEY` and `OPENAI_MODEL`, the agent uses the configured model.
+- Without an OpenAI key, `--dry-run` uses the deterministic policy.
+- `--dry-run` writes to an offline Stripe-like ledger under `.demo-state`.
+- `--real` calls Stripe test mode and requires a `sk_test_` or `rk_test_` key.
+- Live Stripe keys are rejected.
+
+| Variable | Purpose |
+| --- | --- |
+| `OPENAI_API_KEY` | Enables live model reasoning |
+| `OPENAI_MODEL` | Model id used when a key is present |
+| `STRIPE_API_KEY` | Stripe test key required by `--real` |
+| `EFFECT_RESTART_WINDOW_SECONDS` | Holds the uncertain boundary open for a Worker kill |
+| `TEMPORAL_ADDRESS` | Temporal endpoint, default `localhost:7233` |
+| `TEMPORAL_NAMESPACE` | Temporal namespace |
+| `TEMPORAL_TASK_QUEUE` | Worker task queue |
+| `DEMO_STATE_DIR` | Offline ledger, views, logs, and local state |
+
+## Start Temporal and the Worker
+
+Terminal 1:
+
+```bash
+mkdir -p .demo-state
+temporal server start-dev --db-filename .demo-state/temporal.db
+```
+
+Temporal Web is at <http://localhost:8233>.
+
+If another Temporal server already listens on `:7233`, use that server and skip
+the start command.
+
+Terminal 2:
+
+```bash
+uv run refund-worker
+```
+
+Python does not reload a running Worker. Restart it after changing Workflow or
+Activity code.
+
+## Demo 1: process-only progress
+
+Run the naive two-pane agent:
+
+```bash
+uv run naive-refund
+```
+
+The left pane shows context, retrieved memory, and local progress. The right
+pane is the effect owner, a durable ledger of committed refunds.
+
+1. Press Enter or type `refund`. The agent decides, refunds, and remembers
+   completion inside the process.
+2. Type `restart`. The process view disappears while the ledger retains one
+   refund.
+3. Press Enter again. The fixture rebuilds the same request and retrieves the
+   same facts, but it has no authoritative progress record.
+4. The ledger now shows a duplicate refund.
+
+Use `reset` to start over and `quit` to exit.
+
+For a scripted process-restart version:
+
+```bash
+uv run naive-refund reset
+uv run naive-refund refund --order 1234 --exit-after-effect
+uv run naive-refund refund --order 1234
+uv run naive-refund ledger
+```
+
+## Demo 2: manual multi-terminal path
+
+The complete real Stripe path uses four terminals:
+
+```bash
+# Terminal 1: Temporal
+temporal server start-dev --db-filename .demo-state/temporal.db
+
+# Terminal 2: Worker with the uncertain boundary held open
+EFFECT_RESTART_WINDOW_SECONDS=30 uv run refund-worker
+
+# Terminal 3: two-pane view
+uv run refund-demo watch stripe-refund-demo
+
+# Terminal 4: drive the Workflow
+uv run refund-demo start --real --seed --workflow-id stripe-refund-demo
+uv run refund-demo approve stripe-refund-demo "approved"   # if it escalates
+uv run refund-demo kill-worker
+uv run refund-demo inspect stripe-refund-demo
+
+# Terminal 2: recover the Worker and drive attempt 2
+uv run refund-worker
+
+# Terminal 4: wait for the result and reconcile the test charge
+uv run refund-demo result stripe-refund-demo
+uv run refund-demo cleanup
+```
+
+To rehearse offline, remove the restart window and replace `--real --seed` with
+`--dry-run`.
+
+## Run a normal refund
+
+```bash
+uv run refund-demo start --dry-run --workflow-id demo-refund
+uv run refund-demo result demo-refund
+```
+
+The Worker prints the request context, each model-reasoning turn, retrieved
+memory, the decision, and execution-state transitions.
+
+If the agent escalates:
+
+```bash
+uv run refund-demo approve demo-refund "verified defect, approving"
+uv run refund-demo result demo-refund
+```
+
+A low-value request tends to approve automatically. Use a larger amount such as
+`--amount-cents 15000` to push the deterministic policy toward escalation.
+
+Terminate a Workflow you do not want to release with:
+
+```bash
+uv run refund-demo stop demo-refund
+```
+
+## The uncertain-effect beat
+
+This is the main durability payoff.
+
+The failure lands after Stripe accepts the refund but before the Activity can
+report completion. The process cannot know whether money moved. Temporal owns
+the attempt, Stripe owns the effect, and the retry uses one idempotency key.
+
+Start the Worker with a visible restart window:
+
+```bash
+EFFECT_RESTART_WINDOW_SECONDS=30 uv run refund-worker
+```
+
+Start a seeded Stripe test refund:
+
+```bash
+uv run refund-demo start --real --seed --workflow-id demo-restart
+uv run refund-demo approve demo-restart "approved"   # if it escalates
+```
+
+Wait for:
+
+```text
+THE SYSTEM      | refund accepted at Stripe: re_... (stripe-test, attempt 1)
+EXECUTION STATE | restart window open 30s; run: refund-demo kill-worker
+```
+
+Kill the Worker:
+
+```bash
+uv run refund-demo kill-worker
+```
+
+Inspect the ambiguous boundary:
+
+```bash
+uv run refund-demo inspect demo-restart
+```
+
+Stripe already has the refund, while Temporal does not yet have a completed
+Activity result.
+
+Restart the Worker in its own terminal, then wait for the result:
+
+```bash
+EFFECT_RESTART_WINDOW_SECONDS=30 uv run refund-worker
+uv run refund-demo result demo-restart
+uv run refund-demo inspect demo-restart
+```
+
+The final inspection shows:
+
+- `issue_refund` completed on attempt 2
+- two calls used the same idempotency key
+- one unique refund exists
+
+Keep the restart window under the normal 60-second Activity start-to-close
+timeout. The schedule-to-close budget is 10 minutes, so the Worker can take
+longer to return without losing the run.
+
+For an offline rehearsal, replace `--real --seed` with `--dry-run`.
+
+After a real run:
+
+```bash
+uv run refund-demo cleanup
+```
+
+## The clean replay case
+
+The uncertain beat needs idempotency because the first call may have committed
+without a recorded Activity result. The common case is simpler: once a step
+completes and is recorded, replay returns its result without rerunning it.
+
+Start a plain Worker and hold the Workflow after the refund:
+
+```bash
+uv run refund-worker
+uv run refund-demo start --dry-run --hold --workflow-id demo-hold
+```
+
+After the Worker prints `refund recorded; holding for release`, kill and
+restart it:
+
+```bash
+uv run refund-demo kill-worker
+uv run refund-worker
+```
+
+Inspection still shows one call on attempt 1. Release the Workflow:
+
+```bash
+uv run refund-demo release demo-hold
+uv run refund-demo result demo-hold
+```
+
+Replay prevented the completed step from running again. The idempotency key is
+the backstop only for the boundary where the result was not recorded.
+
+## Two-panel view
+
+```bash
+uv run refund-demo watch demo-restart
+```
+
+The left panel is the Worker's in-process decision view:
+
+- current context
+- retrieved memory
+- the decision
+
+It reads `LOST` when the Worker disappears and repopulates from replay when a
+replacement Worker resumes.
+
+The right panel separates:
+
+- execution state owned by Temporal
+- effect state owned by Stripe or the offline ledger
+- pending Activity attempt
+- refund id and call count
+- unique refund count
+
+Make the terminal fullscreen for a talk. Press Ctrl+C to exit.
+
+## Stripe test mode
+
+Put a Stripe test key in `.env`:
+
+```text
+STRIPE_API_KEY=sk_test_...
+```
+
+Seed a succeeded test charge and refund it:
+
+```bash
+uv run refund-demo start --real --seed --workflow-id stripe-refund-demo
+uv run refund-demo approve stripe-refund-demo "approved"   # if it escalates
+uv run refund-demo result stripe-refund-demo
+```
+
+The demo uses Stripe test mode only. It never creates a live charge and rejects
+live keys.
+
+Clean up leftover seeded charges:
+
+```bash
+uv run refund-demo cleanup
+```
+
+## Event history
+
+```bash
+temporal workflow show --workflow-id demo-restart
+temporal workflow describe --workflow-id demo-restart
+```
+
+Useful events include:
+
+- model and tool Activities from the bounded loop
+- `WorkflowExecutionSignaled` when a human approves
+- `issue_refund` attempt 2 after Worker recovery
+
+## Recovery notes
+
+- `result` reads and waits. It does not drive the Workflow. If it hangs, confirm
+  that a Worker is polling.
+- Use a fresh Workflow id for each run.
+- Do not resume a run created under incompatible older Workflow code.
+- Terminate a stale run with `refund-demo stop <id>`.
+- Use `refund-demo cleanup` after Stripe test rehearsals.
