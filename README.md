@@ -196,6 +196,7 @@ than infer the result from memory or an absent completion marker.
 
 | Guide | Use it for |
 | --- | --- |
+| [Ten-minute talk run of show](docs/TALK_10_MIN.md) | Timed speaker notes, stage cues, fallbacks, and a rehearsal scorecard |
 | [Memory, state, and authority](docs/CONCEPTS.md) | The conceptual boundary and system-of-record model |
 | [Manual refund demo](docs/REFUND_DEMO.md) | Multi-terminal setup, uncertain-effect beat, replay case, Stripe mode, and event history |
 | [Permission state demo](docs/PERMISSION_DEMO.md) | Why remembered authorization is not current authorization |
