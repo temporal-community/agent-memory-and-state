@@ -29,7 +29,7 @@ class RefundRequest:
 
 @dataclass(frozen=True)
 class OrderDetails:
-    """MEMORY: order facts the agent retrieves with a tool."""
+    """Domain facts that are copied into working memory by a tool."""
 
     order_id: str
     item: str
@@ -40,7 +40,7 @@ class OrderDetails:
 
 @dataclass(frozen=True)
 class CustomerHistory:
-    """MEMORY: retrieved facts, separate from the incoming context."""
+    """Domain facts that are copied into working memory by a tool."""
 
     customer_id: str
     account_tenure_days: int
@@ -50,7 +50,7 @@ class CustomerHistory:
 
 @dataclass(frozen=True)
 class ReturnStatus:
-    """MEMORY: whether the item came back, retrieved with a tool."""
+    """Domain state that is copied into working memory by a tool."""
 
     order_id: str
     returned: bool

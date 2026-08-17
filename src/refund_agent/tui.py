@@ -58,7 +58,7 @@ def _agent_panel(workflow_id: str) -> Panel:
             "context and retrieved memory were this\n"
             "Worker's live view. They can be rebuilt.\n\n"
             "Temporal still owns execution progress;\n"
-            "Stripe still owns the refund outcome.",
+            "the effect owner still owns the refund outcome.",
             style="red",
         )
         return Panel(
@@ -97,10 +97,11 @@ def _agent_panel(workflow_id: str) -> Panel:
         f"  customer {context.get('customer_id')}\n"
         f"  amount   {context.get('amount_cents')} cents\n\n"
     )
-    body.append("MEMORY (retrieved for the decision)\n", style="bold blue")
+    body.append("MEMORY (retrieved copies for the decision)\n", style="bold blue")
     if observations:
         for obs in observations:
             body.append(f"  {obs.get('tool')}\n")
+        body.append("  source records remain domain state\n", style="dim")
     else:
         body.append("  nothing retrieved yet\n", style="dim")
     body.append("\n")

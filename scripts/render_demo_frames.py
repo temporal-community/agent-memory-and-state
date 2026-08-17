@@ -115,11 +115,11 @@ def _render_naive_frames(output_dir: Path) -> None:
         "context": {"order": "1234", "amount": 8000, "customer": "42"},
         "memory": {"tenure_days": 824, "prior_refunds": 1},
         "recorded": True,
-        "note": "issued re_naive_4f31a3c1, recorded 'done' in its own process",
+        "note": "issued re_naive_4f31a3c1, then wrote a separate done marker",
     }
     duplicate_agent = {
         **active_agent,
-        "note": "issued re_naive_95b8d412, recorded 'done' in its own process",
+        "note": "issued re_naive_95b8d412, then wrote a separate done marker",
     }
     frames = [
         ("01-naive-start.html", _demo_frame({}, []), "Naive demo — ready"),

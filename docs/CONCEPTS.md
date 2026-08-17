@@ -5,21 +5,23 @@ ruling on whether state is a kind of memory:
 
 - **Context** is what the model sees for this decision.
 - **Memory** is what the agent retrieves or recalls to make the decision.
-- **State** is what the application must not guess: progress and external facts
-  recorded by the systems that own them.
+- **State** is an owner's record of progress or facts that informs and constrains
+  what the application may safely do.
 
-The same data can cross these boundaries. The useful question is not what to
-call the bytes, but which record wins when two copies disagree.
+All three can help an agent decide, and the same data can cross these
+boundaries. The useful question is not what to call the bytes, but which record
+wins when two copies disagree.
 
 ## Memory
 
-Memory is what the agent knows. It may be the only account of something no
-other system records, such as its plan or the observation that a customer
-sounded upset.
+Memory is information the agent retains or retrieves to reason. It may be the
+only account of something no other system records, such as its plan or the
+observation that a customer sounded upset. It may also contain a copy of facts
+owned by another system.
 
-What memory cannot establish by itself is provenance. A memory store cannot
-tell an autonomous agent which contents were observed, inferred, or made stale
-by a change elsewhere.
+Memory does not establish authority by itself. Unless provenance and freshness
+are explicitly attached and checked, an autonomous agent may not know which
+contents were observed, inferred, or made stale by a change elsewhere.
 
 Memory appears at two timescales:
 
@@ -32,10 +34,25 @@ Memory appears at two timescales:
 Both forms can be durable. Durability alone does not make them authoritative
 about a fact owned elsewhere.
 
+### Can domain state also be memory?
+
+Yes. These are roles, not storage types. An order row is authoritative domain
+state in the application database. When the agent retrieves that row, the
+retrieved representation also becomes part of its working memory and may enter
+model context. If the agent later keeps a summary, that summary is long-term
+memory. The source order record remains authoritative when the copies disagree.
+
+Likewise, a database is not automatically "state" rather than "memory." A table
+of the agent's reflections can be a memory store; an orders table can be a
+domain-state store; a Temporal Event History records execution state.
+
 ## State
 
-State is an owner's record of a fact it owns. That record may lag the physical
-world, but it remains the version other components reconcile to.
+State is an owner's record of a fact or process it owns. State often should be
+retrieved into an agent's context because it helps the agent decide. Its special
+property is not that the agent avoids using it; it is that other components
+reconcile to that record when copies disagree. The record may lag the physical
+world, but it remains the operational source of truth.
 
 | State | Question | Owner in this demo |
 | --- | --- | --- |
@@ -47,20 +64,26 @@ world, but it remains the version other components reconcile to.
 An autonomous agent can cache any of these facts in context or memory. The
 cached copy does not replace the owner.
 
-## The process-local trap
+## The uncoordinated-progress trap
 
 The dangerous band between memory and state is process-local progress:
 
 > I already issued the refund.
 
-It looks like a record, but it is a belief held by one process. A deploy,
-eviction, restart, OOM, or network partition can remove it at exactly the point
-where an autonomous agent needs certainty.
+In the simplest implementation this is only a belief held by one process. A
+deploy, eviction, restart, OOM, or network partition can remove it at exactly
+the point where an autonomous agent needs certainty.
 
 In the naive demo, the effect owner still has one refund after the process
 restarts. The agent rebuilds the same context and retrieves the same customer
-facts, but no durable owner records its progress. It repeats the decision and
-creates a duplicate.
+facts, but its separate completion marker was never written. It repeats the
+decision and creates a duplicate.
+
+Moving that marker to a durable database does not, by itself, fix the failure.
+If the sequence is "call Stripe, then write done," the process can still die
+after Stripe commits and before the database write. The database then has no
+"done" record while Stripe durably records the refund. The problem is not only
+persistence; it is coordinating an uncertain effect across two owners.
 
 ## Authority, not lifespan
 
@@ -98,9 +121,10 @@ one.
 
 The result may be two calls, but it remains one refund.
 
-Durable execution does not create exactly-once effects. It supplies a durable
-attempt identity and recovery point so retries can reconcile with the effect
-owner.
+Temporal does not make its Event History and Stripe one database transaction,
+and durable execution does not create exactly-once effects. Temporal supplies a
+durable attempt record, identity, and recovery point. Stripe uses that identity
+to reconcile the retry with the effect it already owns.
 
 ## Authorization is the same boundary
 

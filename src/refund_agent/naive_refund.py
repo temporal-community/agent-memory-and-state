@@ -1,10 +1,10 @@
-"""Demo 1: a naive refund agent with no durable execution.
+"""Demo 1: a naive refund agent with no coordinated execution.
 
-Everything lives in the process: context, retrieved memory, and local progress
-(what it has already done). This demo can rebuild its context and retrieve the
-same facts again. Its progress has no durable owner, so a restart (a deploy,
-eviction, OOM, or crash) between issuing the refund and recording that it
-finished makes the next run refund a second time.
+The agent rebuilds its context and retrieves the same facts on every run. It
+calls the effect owner and then writes a separate completion marker. A restart
+(a deploy, eviction, OOM, or crash) between those writes leaves the next run
+unable to tell that the refund committed. Even if the later marker is durable,
+it is not atomic with the effect, so the next run refunds a second time.
 
 This is the same refund task as Demo 2, deliberately built the naive way so the
 restart issues a duplicate refund. Demo 2 is the same agent made durable, where
@@ -88,18 +88,19 @@ def _refund(args: argparse.Namespace) -> None:
     _state_dir().mkdir(parents=True, exist_ok=True)
 
     print(paint("=" * 64, "dim"))
-    # This demo can rebuild CONTEXT and retrieve the same MEMORY on a new run.
+    # Domain facts are retrieved into MEMORY on every new run. The source record
+    # remains domain state; this is the copy the agent reasons with.
     _line("CONTEXT", f"order {order}, {_money(amount)}, customer cus_demo_42")
-    _line("MEMORY", "cus_demo_42: 824 days tenure, 1 prior refund")
+    _line("MEMORY COPY", "cus_demo_42: 824 days tenure, 1 prior refund")
 
-    # LOCAL PROGRESS: the naive agent's only record of what it already did is a
-    # local completion marker. A restart before that marker is written erases it.
+    # The completion marker is separate from the effect. It can be durable after
+    # it is written and still cannot close the crash gap before that write.
     if _done_path(order).exists():
-        _line("LOCAL PROGRESS", "completion record found; already refunded, done")
+        _line("PROGRESS RECORD", "completion marker found; already refunded, done")
         return
     _line(
-        "LOCAL PROGRESS",
-        "no completion record; no durable proof this order was refunded",
+        "PROGRESS RECORD",
+        "no marker; cannot infer whether the external effect committed",
     )
 
     _line("MODEL REASONING", "approve (amount within policy, clean history)")
@@ -108,7 +109,7 @@ def _refund(args: argparse.Namespace) -> None:
 
     if args.exit_after_effect:
         _line(
-            "LOCAL PROGRESS",
+            "PROGRESS RECORD",
             paint("process exits before recording completion", "danger"),
         )
         sys.stdout.flush()
@@ -118,7 +119,7 @@ def _refund(args: argparse.Namespace) -> None:
         json.dumps({"order_id": order, "refund_id": refund_id}) + "\n",
         encoding="utf-8",
     )
-    _line("LOCAL PROGRESS", "recorded completion")
+    _line("PROGRESS RECORD", "recorded completion in a separate write")
     count = _refund_count(order)
     if count > 1:
         _line(
@@ -161,9 +162,9 @@ def _reset(_args: argparse.Namespace) -> None:
 
 
 def _process_interactive(agent: dict, ledger: list) -> None:
-    # This fixture can rebuild context and retrieve the same customer facts on
-    # every run. Whether the order was already refunded lives only in this dict,
-    # so a restart that clears it makes the agent refund again.
+    # This interactive fixture keeps progress in process to make the loss
+    # visible. The scripted path above demonstrates the broader crash gap between
+    # an effect and a separate completion write.
     order, amount, customer = "1234", 8000, "42"
     agent["context"] = {"order": order, "amount": amount, "customer": customer}
     agent["memory"] = {"tenure_days": 824, "prior_refunds": 1}
@@ -188,8 +189,8 @@ def _demo_frame(agent: dict, ledger: list):
             left.append(
                 "the worker restarted (deploy, eviction, OOM).\n"
                 "context can be rebuilt and memory retrieved,\n"
-                "but no durable progress record says the\n"
-                "refund already happened",
+                "but no coordinated progress record can say\n"
+                "whether the refund already happened",
                 style="yellow",
             )
         else:
@@ -206,13 +207,13 @@ def _demo_frame(agent: dict, ledger: list):
             f"  Customer {context.get('customer')} requested a refund\n"
             f"  for order {context.get('order')}, ${amount:.2f}\n\n"
         )
-        left.append("MEMORY (retrieved for the decision)\n", style="bold blue")
+        left.append("MEMORY (retrieved copy for the decision)\n", style="bold blue")
         left.append(
-            f"  looked up customer {context.get('customer')} in the DB:\n"
+            f"  copied customer {context.get('customer')} facts from domain state:\n"
             f"  {memory.get('tenure_days')} days, "
             f"{memory.get('prior_refunds')} prior refunds\n\n"
         )
-        left.append("LOCAL PROGRESS (no durable owner)\n", style="bold red")
+        left.append("PROGRESS RECORD (not coordinated)\n", style="bold red")
         if agent.get("recorded"):
             left.append(f"  {agent.get('note')}\n")
         else:
@@ -232,15 +233,15 @@ def _demo_frame(agent: dict, ledger: list):
     header_text = Text()
     header_text.append("Demo 1: Naive Refund Agent\n", style="bold")
     header_text.append(
-        "CONTEXT + MEMORY help decide. Local progress is the only record of done.",
+        "CONTEXT + MEMORY inform the decision. Neither proves the effect committed.",
         style="dim",
     )
     header = Panel(header_text, border_style="cyan")
     why = Panel(
-        "- context and memory can be rebuilt, but neither proves work completed\n"
-        "- local progress disappears, so recovery guesses and acts again\n"
-        "- the effect has no stable identity it can use to deduplicate",
-        title="why state matters",
+        "- context and memory can repeat a decision, not prove its effect\n"
+        "- a later done marker, even durable, leaves this crash gap\n"
+        "- no stable effect identity lets the owner deduplicate the retry",
+        title="why coordination matters",
         border_style="yellow",
     )
     footer = Panel(

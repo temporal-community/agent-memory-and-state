@@ -57,16 +57,16 @@ def test_stage_role_copy_separates_context_memory_and_state() -> None:
     assert "CONTEXT" in text
     assert "what the model sees" in text
     assert "MEMORY" in text
-    assert "retrieves or recalls" in text
+    assert "agent reasons with" in text
     assert "STATE" in text
-    assert "must not guess" in text
+    assert "must not be guessed" in text
 
 
 def test_stage_closing_states_the_observable_outcome() -> None:
     panels = list(_closing().renderables)
 
     assert "two committed refunds" in panels[0].renderable.plain
-    assert "two calls, one Stripe refund" in panels[0].renderable.plain
+    assert "two calls, one refund" in panels[0].renderable.plain
 
 
 def test_stage_reads_scripted_naive_ledger(tmp_path) -> None:

@@ -2,8 +2,9 @@
 
 The agent loop lives in the Workflow. Each turn it calls agent_step (the model),
 which either asks for a tool or reaches a decision. The tools (lookup_order,
-lookup_customer_history, check_refund_policy) are the retrieval the agent does
-live, and issue_refund is the one external effect.
+lookup_customer_history, check_refund_policy) retrieve domain records whose
+results become the agent's working memory, and issue_refund is the one external
+effect.
 """
 
 from __future__ import annotations
@@ -112,7 +113,7 @@ def _agent_summary(view: dict[str, object]) -> str:
 
 @activity.defn
 def lookup_order(order_id: str) -> OrderDetails:
-    """MEMORY: retrieve the order being refunded."""
+    """Retrieve domain state and return a copy for working memory."""
 
     order = OrderDetails(
         order_id=order_id,
@@ -122,7 +123,7 @@ def lookup_order(order_id: str) -> OrderDetails:
         purchased_at="2026-06-03",
     )
     _line(
-        "MEMORY",
+        "MEMORY COPY",
         f"lookup_order: {order.item}, ${order.amount_cents / 100:.2f}, {order.status}",
     )
     return order
@@ -130,7 +131,7 @@ def lookup_order(order_id: str) -> OrderDetails:
 
 @activity.defn
 def lookup_customer_history(customer_id: str) -> CustomerHistory:
-    """MEMORY: retrieve the customer's tenure, purchases, and prior refunds."""
+    """Retrieve domain facts and return a copy for working memory."""
 
     history = CustomerHistory(
         customer_id=customer_id,
@@ -143,7 +144,7 @@ def lookup_customer_history(customer_id: str) -> CustomerHistory:
         prior_refunds=["2025-08-09, laptop stickers, 1800 cents, approved"],
     )
     _line(
-        "MEMORY",
+        "MEMORY COPY",
         f"lookup_customer_history: {history.account_tenure_days} days, "
         f"{len(history.prior_refunds)} prior",
     )
@@ -152,7 +153,7 @@ def lookup_customer_history(customer_id: str) -> CustomerHistory:
 
 @activity.defn
 def check_refund_policy(order_id: str) -> ReturnStatus:
-    """MEMORY: retrieve the return status that governs refund eligibility."""
+    """Retrieve domain state and return a copy for working memory."""
 
     status = ReturnStatus(
         order_id=order_id,
@@ -160,7 +161,7 @@ def check_refund_policy(order_id: str) -> ReturnStatus:
         received_back=False,
         note="no return on file",
     )
-    _line("MEMORY", f"check_refund_policy: {status.note}")
+    _line("MEMORY COPY", f"check_refund_policy: {status.note}")
     return status
 
 

@@ -46,9 +46,9 @@ def _roles() -> Panel:
     body.append("CONTEXT  ", style="bold yellow")
     body.append("what the model sees right now; rebuilt from the request\n")
     body.append("MEMORY   ", style="bold blue")
-    body.append("what the agent retrieves or recalls to make a decision\n")
+    body.append("retained or retrieved information the agent reasons with\n")
     body.append("STATE    ", style="bold green")
-    body.append("what the application must not guess; an owner records it")
+    body.append("an owner's record; informs action and must not be guessed")
     return Panel(
         body,
         title="Three roles — the same data can cross these boundaries",
@@ -61,7 +61,7 @@ def _intro() -> Group:
     thesis.append("An agent can remember the conversation and forget the work.\n\n")
     thesis.append(
         "We will send the same request, lose a real process at the same failure "
-        "boundary, and change only who owns the record of progress."
+        "boundary, then add a durable progress owner and stable effect identity."
     )
     return Group(
         Panel(thesis, title="Agent memory and state", border_style="cyan"),
@@ -76,14 +76,14 @@ def _closing() -> Group:
     result.append("MEMORY   ", style="bold blue")
     result.append("was retrieved again in both demos.\n")
     result.append("STATE    ", style="bold green")
-    result.append("decided whether recovery guessed or knew what already happened.\n\n")
+    result.append("let recovery act without treating memory as proof.\n\n")
     result.append("Naive: two committed refunds.  ", style="bold red")
-    result.append("Durable: two calls, one Stripe refund.", style="bold green")
+    result.append("Durable: two calls, one refund.", style="bold green")
     return Group(
         Panel(result, title="The difference", border_style="green"),
         Panel(
-            "Optimize knowledge for relevance. Preserve authoritative state "
-            "for correctness.",
+            "Use memory to reason. Use authoritative state to ground and "
+            "coordinate action.",
             border_style="white",
         ),
     )

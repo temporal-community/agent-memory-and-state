@@ -69,7 +69,7 @@ uv run refund-worker
 Python does not reload a running Worker. Restart it after changing Workflow or
 Activity code.
 
-## Demo 1: process-only progress
+## Demo 1: uncoordinated progress
 
 Run the naive two-pane agent:
 
@@ -77,16 +77,21 @@ Run the naive two-pane agent:
 uv run naive-refund
 ```
 
-The left pane shows context, retrieved memory, and local progress. The right
-pane is the effect owner, a durable ledger of committed refunds.
+The left pane shows context, retrieved copies in working memory, and a progress
+record separate from the effect. The right pane is the effect owner, a durable
+ledger of committed refunds.
 
-1. Press Enter or type `refund`. The agent decides, refunds, and remembers
-   completion inside the process.
+1. Press Enter or type `refund`. The agent decides and refunds. Its progress
+   record is separate from the effect.
 2. Type `restart`. The process view disappears while the ledger retains one
    refund.
 3. Press Enter again. The fixture rebuilds the same request and retrieves the
-   same facts, but it has no authoritative progress record.
+   same facts, but it cannot infer the effect from its missing progress record.
 4. The ledger now shows a duplicate refund.
+
+The scripted path makes the crash gap explicit: the effect commits before the
+completion marker is written. Putting that later marker in durable storage
+would not make its write atomic with the effect owner's write.
 
 Use `reset` to start over and `quit` to exit.
 
@@ -163,6 +168,8 @@ This is the main durability payoff.
 The failure lands after Stripe accepts the refund but before the Activity can
 report completion. The process cannot know whether money moved. Temporal owns
 the attempt, Stripe owns the effect, and the retry uses one idempotency key.
+Temporal does not turn the two records into one database transaction; it gives
+the uncertain attempt a durable recovery point and stable identity.
 
 Start the Worker with a visible restart window:
 
@@ -265,7 +272,7 @@ uv run refund-demo watch demo-restart
 The left panel is the Worker's in-process decision view:
 
 - current context
-- retrieved memory
+- retrieved domain facts copied into working memory
 - the decision
 
 It reads `LOST` when the Worker disappears and repopulates from replay when a

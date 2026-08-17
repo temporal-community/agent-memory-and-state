@@ -24,4 +24,4 @@ def test_lost_agent_panel_points_to_durable_owners(monkeypatch) -> None:
 
     assert "LOST" in panel.renderable.plain
     assert "Temporal still owns execution progress" in panel.renderable.plain
-    assert "Stripe still owns the refund outcome" in panel.renderable.plain
+    assert "effect owner still owns the refund outcome" in panel.renderable.plain

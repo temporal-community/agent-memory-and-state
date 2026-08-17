@@ -29,29 +29,40 @@ memory, and authoritative state visible.
 | Moment | Naive agent | Durable agent |
 | --- | --- | --- |
 | **Before the request** | Empty process, ready for work | Empty process, ready for work |
-| **After the refund call** | Remembers "done" only inside the process | Temporal records the attempt; Stripe records the effect |
-| **Worker disappears** | The completion belief disappears | The process view disappears; both records remain |
+| **After the refund call** | The effect exists; its separate completion marker was not written | Temporal records the attempt; Stripe records the effect |
+| **Worker disappears** | A new process sees no completion record | The process view disappears; both authoritative records remain |
 | **Worker returns** | Acts again: **two refunds** | Replays or retries with one key: **one refund** |
 
 ## The boundary that matters
 
-The useful distinction is authority, not durability. Memory can be durable and
-state can expire. Ask one question:
+The useful distinction is operational role and authority, not storage
+technology or lifespan. Context, memory, and state can all inform an agent, and
+representations of all three can be stored in a database. Ask one question:
 
 > When two copies disagree, which record wins?
 
 | Role | What it answers | Authority |
 | --- | --- | --- |
 | **Context** | What does the model see for this decision? | Assembled for the current turn |
-| **Memory** | What does the agent retrieve or recall? | The agent or its memory system |
+| **Memory** | What retained or retrieved information does the agent use to reason? | The agent or its memory system |
 | **Execution state** | Where does the work stand? | Temporal |
 | **Effect state** | Did the refund actually commit? | Stripe |
 | **Authorization state** | May the agent act? | The authorization system |
 | **Domain state** | What are the business facts? | The application database |
 
-The dangerous middle is process-local progress such as "I already refunded."
-It looks like a record, but it is only a belief held by one process. A restart
-removes it.
+These roles are not mutually exclusive buckets for bytes. Order facts can be
+domain state in the application database, copied into the agent's memory, and
+then assembled into model context. A database that stores the agent's own
+recollections is a memory store; a database that owns the current order record
+is authoritative domain state. When copies disagree, the role and owner—not the
+database technology—determine which record wins.
+
+The dangerous gap is progress that is not coordinated with the external effect.
+Suppose the application calls Stripe and then writes a "done" marker. Stripe can
+commit the refund before the marker is written. Even if that marker lives in a
+durable database, a crash between the two writes leaves the next process unable
+to tell whether the refund happened. Persistence protects the marker after it
+exists; it does not make the marker and Stripe one atomic operation.
 
 Read [Memory, state, and authority](docs/CONCEPTS.md) for the complete model,
 including working and long-term memory, the lifespan framing, and the
@@ -62,6 +73,8 @@ exactly-once misconception.
 - Reconstructing context does not prove whether a prior effect committed.
 - Retrieving the same memory can reproduce the same decision and repeat the
   same mistake.
+- Persisting a completion marker after an external effect does not close the
+  crash gap between the two systems.
 - A durable Workflow records where the work stands across Worker restarts.
 - Stripe remains authoritative about whether the refund exists.
 - One Workflow identity can become one effect idempotency key.
@@ -164,9 +177,9 @@ Put local values in `.env`; exported shell variables take precedence.
 
 ## Read the payoff
 
-| Process-only progress | Authoritative state |
+| Uncoordinated progress | Authoritative state |
 | --- | --- |
-| The naive process forgets its completion marker and issues a duplicate. | The durable run can call Stripe twice with one idempotency key and keep one refund. |
+| The naive run crashes after the refund but before its separate completion marker, then issues a duplicate. | The durable run can call Stripe twice with one idempotency key and keep one refund. |
 | ![The naive demo showing two committed refunds and a duplicate warning](assets/naive-duplicate.png) | ![The durable demo showing two calls and one unique refund after recovery](assets/durable-recovered.png) |
 
 The durable side has two owners:
@@ -174,8 +187,10 @@ The durable side has two owners:
 - **Temporal** owns the Activity attempt and execution progress.
 - **Stripe** owns whether the refund committed.
 
-A recorded call is not proof that money moved. The shared identity lets the
-retry reconcile with Stripe rather than infer the result from memory.
+A recorded call is not proof that money moved, and a later "done" write cannot
+be atomic with Stripe. Temporal durably records the attempt and supplies the
+recovery point; the shared identity lets the retry reconcile with Stripe rather
+than infer the result from memory or an absent completion marker.
 
 ## Explore the demos
 
@@ -190,7 +205,7 @@ retry reconcile with Stripe rather than infer the result from memory.
 | Command | Purpose |
 | --- | --- |
 | `uv run refund-demo stage` | Run the recommended one-window talk path |
-| `uv run naive-refund` | Explore the process-only agent interactively |
+| `uv run naive-refund` | Explore the uncoordinated agent interactively |
 | `uv run refund-worker` | Start the Temporal Worker for manual runs |
 | `uv run refund-demo watch <id>` | Watch context and memory beside authoritative state |
 | `uv run refund-demo inspect <id>` | Inspect a Workflow and its effect calls |
@@ -211,7 +226,7 @@ uv run --extra dev python scripts/render_demo_frames.py
 src/refund_agent/workflow.py       durable agent loop and Signals
 src/refund_agent/activities.py     model, tool, and refund side effects
 src/refund_agent/stage.py          guided one-window talk runner
-src/refund_agent/naive_refund.py   process-only comparison
+src/refund_agent/naive_refund.py   uncoordinated comparison
 src/refund_agent/fake_stripe.py    offline effect ledger
 src/refund_agent/permission_chat.py authorization-state companion
 assets/                            generated demo reel and screenshots
