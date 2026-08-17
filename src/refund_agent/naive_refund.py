@@ -191,9 +191,11 @@ def _process_interactive(
 
 
 def _demo_frame(agent: dict, ledger: list, *, stage_mode: bool = False):
-    from rich.layout import Layout
+    from rich.console import Group
     from rich.panel import Panel
     from rich.text import Text
+
+    from refund_agent.tui import _compact_columns
 
     left = Text()
     if "context" not in agent:
@@ -285,32 +287,19 @@ def _demo_frame(agent: dict, ledger: list, *, stage_mode: bool = False):
         controls,
         border_style="dim",
     )
-    layout = Layout()
-    layout.split_column(
-        Layout(header, name="head", size=4),
-        Layout(name="body"),
-        Layout(why, name="why", size=4),
-        Layout(footer, name="foot", size=3),
-    )
-    layout["body"].split_row(
-        Layout(
-            Panel(
-                left,
-                title="THIS AGENT SESSION",
-                border_style="cyan",
-            ),
-            name="agent",
+    panes = _compact_columns(
+        Panel(
+            left,
+            title="THIS AGENT SESSION",
+            border_style="cyan",
         ),
-        Layout(
-            Panel(
-                right,
-                title="REFUND SYSTEM",
-                border_style="green",
-            ),
-            name="world",
+        Panel(
+            right,
+            title="REFUND SYSTEM",
+            border_style="green",
         ),
     )
-    return layout
+    return Group(header, panes, why, footer)
 
 
 def _run_interactive() -> None:

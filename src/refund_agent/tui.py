@@ -14,9 +14,13 @@ import asyncio
 import json
 import os
 
+from rich import box
+from rich.console import Group
 from rich.layout import Layout
 from rich.live import Live
 from rich.panel import Panel
+from rich.style import Style
+from rich.table import Table
 from rich.text import Text
 from temporalio.client import Client
 from temporalio.service import RPCError
@@ -390,23 +394,47 @@ def _build(workflow_id: str, agent: Panel, system: Panel) -> Layout:
     return layout
 
 
-def _stage_build(agent: Panel, system: Panel) -> Layout:
+def _compact_columns(left: Panel, right: Panel) -> Table:
+    """Keep two stage panes aligned without stretching them to screen height."""
+
+    def heading_style(panel: Panel) -> Style:
+        border_style = panel.border_style
+        color = (
+            Style.parse(border_style) if isinstance(border_style, str) else border_style
+        )
+        return Style.combine([color or Style(), Style(bold=True)])
+
+    columns = Table(
+        box=box.ROUNDED,
+        border_style="dim",
+        expand=True,
+        padding=(0, 1),
+    )
+    columns.add_column(
+        Text(str(left.title), justify="center"),
+        ratio=1,
+        header_style=heading_style(left),
+    )
+    columns.add_column(
+        Text(str(right.title), justify="center"),
+        ratio=1,
+        header_style=heading_style(right),
+    )
+    columns.add_row(left.renderable, right.renderable)
+    return columns
+
+
+def _stage_build(agent: Panel, system: Panel) -> Group:
     header = Text()
     header.append("Demo 2: The work keeps its place\n", style="bold")
     header.append(
         "The Worker can disappear. The work and refund records survive.",
         style="dim",
     )
-    layout = Layout()
-    layout.split_column(
-        Layout(Panel(header, border_style="white"), size=4, name="head"),
-        Layout(name="body"),
+    return Group(
+        Panel(header, border_style="white"),
+        _compact_columns(agent, system),
     )
-    layout["body"].split_row(
-        Layout(agent, name="agent"),
-        Layout(system, name="system"),
-    )
-    return layout
 
 
 async def watch(workflow_id: str) -> None:

@@ -146,3 +146,35 @@ def test_naive_duplicate_explains_lost_execution_progress() -> None:
     assert "could not resume the first request" in text
     assert "treated the customer's second message as new work" in text
     assert "tied both attempts to one refund" not in text
+
+
+def test_naive_stage_frame_does_not_stretch_to_terminal_height() -> None:
+    frame = _demo_frame(
+        {"_restarted": True},
+        [{"refund_id": "r1", "order": "1234", "amount": 8000}],
+        stage_mode=True,
+    )
+    output = io.StringIO()
+    Console(file=output, width=80, height=40).print(frame)
+
+    assert len(output.getvalue().splitlines()) < 24
+
+
+def test_durable_stage_frame_does_not_stretch_to_terminal_height(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
+    monkeypatch.setattr(tui, "_worker_alive", lambda: (True, 456))
+    frame = tui._stage_build(
+        tui._stage_agent_panel("existing-refund", recovered=True),
+        tui._stage_system_view(
+            status="COMPLETED",
+            refund={"calls": 2},
+            pending_attempt=None,
+            refund_step_completed=True,
+        ),
+    )
+    output = io.StringIO()
+    Console(file=output, width=80, height=40).print(frame)
+
+    assert len(output.getvalue().splitlines()) < 20
