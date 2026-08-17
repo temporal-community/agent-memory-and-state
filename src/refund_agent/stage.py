@@ -451,7 +451,7 @@ async def run(
                 _naive_ledger(stage_state),
                 stage_mode=True,
             ),
-            "Press Enter to replace this Worker before it saves its progress",
+            "Press Enter to replace this Worker and reload the agent",
         )
         _stop_naive_worker(naive_worker)
         naive_worker = None

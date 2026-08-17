@@ -257,11 +257,8 @@ def _demo_frame(agent: dict, ledger: list, *, stage_mode: bool = False):
         )
         explanation_title = "WHAT WENT WRONG"
     elif agent.get("_effect_unrecorded") and ledger:
-        explanation = (
-            "The refund succeeded. This Worker has not saved that progress.\n"
-            "Now replace it at this uncertain moment."
-        )
-        explanation_title = "REFUND ISSUED"
+        explanation = "The refund is recorded.\nThe completed customer request is not."
+        explanation_title = "WHAT IS MISSING"
     elif agent.get("_restarted") and ledger:
         explanation = (
             "A replacement Worker starts with a blank conversation.\n"

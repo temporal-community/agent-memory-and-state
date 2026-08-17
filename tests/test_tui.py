@@ -105,6 +105,8 @@ def test_naive_first_refund_holds_on_the_agent_reply() -> None:
 
     assert "Please refund my plush python" in text
     assert "Refund issued." in text
-    assert "REFUND ISSUED" in text
+    assert "WHAT IS MISSING" in text
+    assert "The refund is recorded" in text
+    assert "The completed customer request is not" in text
     assert "Press Enter to replace this Worker" in text
     assert "crash" not in text.lower()

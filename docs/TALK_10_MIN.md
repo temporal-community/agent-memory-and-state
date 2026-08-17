@@ -109,8 +109,9 @@ the Worker before its separate completion marker is written.
 
 **Say over the one-refund frame**
 
-“The refund exists on the right. Now this Worker is replaced before it saves
-its progress. A durable done flag written afterward would have the same gap.”
+“The refund is recorded. The completed customer request is not. Now this
+Worker is replaced. A durable done flag written afterward would have the same
+gap.”
 
 **Action**
 
