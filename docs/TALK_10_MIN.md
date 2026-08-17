@@ -174,13 +174,16 @@ Worker is disposable; the execution is not.”
 **Action**
 
 Press Enter to start the replacement Worker. After recovery, point to `calls 2`
-and `unique refunds 1`.
+and `unique refunds 1`, but make the left pane the headline: `NO NEW CUSTOMER
+REQUEST` and “Your refund is complete.”
 
 **Say**
 
-“Temporal retries the uncertain Activity with the same operation identity. The
-effect owner recognizes the retry and returns the original result: two calls,
-one refund.”
+“On the naive side, the customer had to ask again. Here they asked once. The
+reloaded agent reconnects to the same work and can say, ‘Your refund is
+complete.’ Temporal retried the unresolved step with the same operation
+identity, and the effect owner returned the original result: two calls, one
+refund.”
 
 **Checkpoint:** The recovered result should be visible by **6:30**.
 
@@ -253,7 +256,7 @@ recover it.”
 | Enter | Empty durable agent | 3:45 |
 | Type refund request | Effect accepted; completion uncertain | 4:30 |
 | Enter | Current Worker replaced; `WORKER GONE` | 5:15 |
-| Enter | Replacement Worker; two calls, one refund | 6:15 |
+| Enter | Reloaded agent answers without a second request | 6:15 |
 | Enter | Final takeaway | 9:30 |
 
 ## If time slips

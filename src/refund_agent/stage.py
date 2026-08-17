@@ -74,10 +74,13 @@ def _intro() -> Group:
 
 def _closing() -> Group:
     result = Text()
-    result.append("The agent could rebuild the request and decide again.\n")
-    result.append("Only durable records could recover the work safely.\n\n")
-    result.append("Naive: two committed refunds.  ", style="bold red")
-    result.append("Durable: two calls, one refund.", style="bold green")
+    result.append("Naive: the customer had to ask again.\n", style="bold red")
+    result.append(
+        "Durable: the reloaded agent resumed the existing work.\n\n",
+        style="bold green",
+    )
+    result.append("No second request.  ", style="bold green")
+    result.append("Two calls, one refund.", style="green")
     return Group(
         Panel(result, title="The difference", border_style="green"),
         Panel(
@@ -375,12 +378,12 @@ def _ask_for_refund(console: Console, renderable, cue: str) -> str:
     return request or _DEFAULT_REFUND_REQUEST
 
 
-async def _durable_frame(client: Client, workflow_id: str):
+async def _durable_frame(client: Client, workflow_id: str, *, recovered: bool = False):
     # The talk path uses plain language. `refund-demo watch` keeps the detailed
     # execution vocabulary for technical exploration.
     from refund_agent import tui
 
-    agent = tui._stage_agent_panel(workflow_id)
+    agent = tui._stage_agent_panel(workflow_id, recovered=recovered)
     system = await tui._stage_system_panel(client, workflow_id)
     return tui._stage_build(agent, system)
 
@@ -541,18 +544,18 @@ async def run(
         _show(
             console,
             await _durable_frame(client, workflow_id),
-            "Press Enter to start a fresh Worker",
+            "Press Enter to reload the agent with a replacement Worker",
         )
 
         with console.status(
-            "Replaying recorded state and retrying with the same effect identity..."
+            "Resuming the existing refund; no new customer request needed..."
         ):
             await services.start_worker()
             await asyncio.wait_for(handle.result(), timeout=_DEMO_TIMEOUT_SECONDS)
         completed = True
         _show(
             console,
-            await _durable_frame(client, workflow_id),
+            await _durable_frame(client, workflow_id, recovered=True),
             "Press Enter for the takeaway",
         )
         console.clear()

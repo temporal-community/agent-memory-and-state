@@ -158,7 +158,8 @@ The guided runner:
 5. Sends the same request through a Temporal Workflow.
 6. Replaces the Worker after the effect owner accepts the refund but before the
    Activity reports completion.
-7. Starts a replacement Worker and resolves two calls to one refund.
+7. Reloads the agent, resumes the existing work without another customer
+   request, and reports that the refund is complete.
 
 It uses a deterministic policy and offline Stripe-like ledger by default. It
 starts a local Temporal dev server only when one is not already reachable and

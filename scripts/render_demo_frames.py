@@ -211,7 +211,7 @@ def _render_durable_frames(output_dir: Path) -> None:
             )
 
             tui._worker_alive = lambda: (True, 5252)
-            recovered_agent = tui._stage_agent_panel(WORKFLOW_ID)
+            recovered_agent = tui._stage_agent_panel(WORKFLOW_ID, recovered=True)
             _export(
                 tui._stage_build(
                     recovered_agent,

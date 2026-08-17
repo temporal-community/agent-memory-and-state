@@ -123,7 +123,7 @@ def _agent_panel(workflow_id: str) -> Panel:
     )
 
 
-def _stage_agent_panel(workflow_id: str) -> Panel:
+def _stage_agent_panel(workflow_id: str, *, recovered: bool = False) -> Panel:
     """Plain-language Worker view for a general-audience talk."""
 
     alive, _ = _worker_alive()
@@ -135,6 +135,16 @@ def _stage_agent_panel(workflow_id: str) -> Panel:
             style="red",
         )
         return Panel(body, title="THIS WORKER", border_style="red")
+
+    if recovered:
+        body.append("NO NEW CUSTOMER REQUEST\n\n", style="bold green")
+        body.append(
+            "Temporal reconnected this agent to the existing refund.\n\n",
+            style="green",
+        )
+        body.append("AGENT\n", style="bold cyan")
+        body.append("  Your refund is complete.", style="bold")
+        return Panel(body, title="RELOADED AGENT", border_style="green")
 
     view = _read_agent_view(workflow_id)
     if not view:

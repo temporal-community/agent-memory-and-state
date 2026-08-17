@@ -83,8 +83,10 @@ def test_stage_role_copy_separates_context_memory_and_state() -> None:
 def test_stage_closing_states_the_observable_outcome() -> None:
     panels = list(_closing().renderables)
 
-    assert "two committed refunds" in panels[0].renderable.plain
-    assert "two calls, one refund" in panels[0].renderable.plain
+    assert "customer had to ask again" in panels[0].renderable.plain
+    assert "reloaded agent resumed" in panels[0].renderable.plain
+    assert "No second request" in panels[0].renderable.plain
+    assert "Two calls, one refund" in panels[0].renderable.plain
 
 
 def test_stage_accepts_a_spoken_refund_request(monkeypatch) -> None:

@@ -42,6 +42,20 @@ def test_stage_agent_returns_without_chat_history(tmp_path, monkeypatch) -> None
     assert "No conversation history" in panel.renderable.plain
 
 
+def test_reloaded_agent_answers_without_a_new_customer_request(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
+    monkeypatch.setattr(tui, "_worker_alive", lambda: (True, 456))
+
+    panel = tui._stage_agent_panel("existing-refund", recovered=True)
+
+    assert panel.title == "RELOADED AGENT"
+    assert "NO NEW CUSTOMER REQUEST" in panel.renderable.plain
+    assert "existing refund" in panel.renderable.plain
+    assert "Your refund is complete" in panel.renderable.plain
+
+
 def test_stage_system_view_makes_the_payoff_glanceable() -> None:
     panel = tui._stage_system_view(
         status="COMPLETED",
