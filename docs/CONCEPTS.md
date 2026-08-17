@@ -76,10 +76,15 @@ has its authoritative record, but that record contains only what reached it.
 
 In the naive stage demo, the agent asks two questions, performs two lookups, and
 chooses `issue refund` as its next action. The Worker then disappears before
-calling Stripe. Memory can recall Nyghtowl's answers, and a replacement agent
-correctly finds a paid order with no refund. Both records do their jobs. The
-failure is that neither owns the active loop, its completed observations, or its
-next action, so the customer restarts the return.
+calling Stripe. Its process-local working memory disappears too. A replacement
+agent correctly finds a paid order with no refund in Stripe, but Stripe never
+owned Nyghtowl's answers, the completed observations, or the next action. The
+customer therefore restarts the return.
+
+Persisting the answers in a separate memory system would make them retrievable,
+but would not by itself make that system the owner of an active operation. To
+resume safely, something must durably record that the operation exists, which
+steps completed, and what remains to do.
 
 A database-backed operation row, queue, scheduler, and reconciliation state
 machine could remember and resume that work. Those pieces are execution state.

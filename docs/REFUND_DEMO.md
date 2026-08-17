@@ -111,16 +111,17 @@ order and Stripe's refund state.
 1. Press Enter or type `refund`. The standalone view condenses the agent's two
    questions, two answers, and two lookups into its completed-loop checklist;
    the guided stage asks the questions one at a time.
-2. Type `restart`. The loop position disappears. Memory may retain the answers,
-   and Stripe still says paid with no refund.
+2. Type `restart`. The process-local answers and loop position disappear.
+   Stripe still says paid with no refund.
 3. Ask, `What happened to my refund?`
 4. The replacement agent checks Stripe and answers correctly, but the customer
    must restart the return because there is no active execution to resume.
 
-This is accurate memory and effect state without resumable application work.
-Neither remembered facts nor Stripe's record owns the loop position. A custom
-database state machine and recovery job could supply that missing execution
-state; Temporal is the implementation shown on the durable side.
+This is durable effect state beside lost working memory and lost application
+work. A persisted memory layer could restore the answers, but neither those
+facts nor Stripe's record would own the active loop position. A custom database
+state machine and recovery job could supply that missing execution state;
+Temporal is the implementation shown on the durable side.
 
 Use `reset` to start over and `quit` to exit.
 

@@ -61,8 +61,8 @@ def _roles() -> Panel:
 def _intro() -> Group:
     thesis = Text()
     thesis.append(
-        "An agent can remember everything the customer said and still lose "
-        "the work they submitted.\n\n"
+        "An agent can know exactly what to do and still lose the work a "
+        "customer submitted.\n\n"
     )
     thesis.append(
         "We will interrupt the same observe–reason–act loop before Stripe "
@@ -685,16 +685,10 @@ async def run(
         )
         _stop_naive_worker(naive_worker)
         naive_worker = None
-        remembered_answers = [
-            step for step in naive_steps if step.get("kind") == "answer"
-        ]
         status_question = _ask_for_refund(
             console,
             _demo_frame(
-                {
-                    "_restarted": True,
-                    "_remembered_steps": remembered_answers,
-                },
+                {"_restarted": True},
                 [],
                 stage_mode=True,
             ),
@@ -707,10 +701,8 @@ async def run(
                 "amount": amount_cents,
                 "customer": "Nyghtowl",
             },
-            "memory": {"tenure_days": 824, "prior_refunds": 1},
             "_status_checked": True,
             "_refund_missing": True,
-            "_remembered_steps": remembered_answers,
             "note": "new process checked Stripe after the customer asked",
             "user_message": status_question,
         }

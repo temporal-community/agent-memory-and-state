@@ -118,13 +118,8 @@ def _render_naive_frames(output_dir: Path) -> None:
     status_agent = {
         "user_message": "What happened to my refund?",
         "context": {"order": "1234", "amount": 8000, "customer": "Nyghtowl"},
-        "memory": {"tenure_days": 824, "prior_refunds": 1},
         "_status_checked": True,
         "_refund_missing": True,
-        "_remembered_steps": [
-            {"kind": "answer", "question_id": "item_opened", "result": "Yes"},
-            {"kind": "answer", "question_id": "damage", "result": "Split seam"},
-        ],
         "note": "new process checked Stripe after the customer asked",
     }
     frames = [
@@ -141,10 +136,7 @@ def _render_naive_frames(output_dir: Path) -> None:
         (
             "03-naive-restarted.html",
             _demo_frame(
-                {
-                    "_restarted": True,
-                    "_remembered_steps": status_agent["_remembered_steps"],
-                },
+                {"_restarted": True},
                 [],
                 stage_mode=True,
             ),

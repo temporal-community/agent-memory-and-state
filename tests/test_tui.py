@@ -93,7 +93,7 @@ def test_naive_restart_returns_to_a_blank_conversation() -> None:
     assert "Welcome back, Nyghtowl" in text
     assert "REPLACEMENT WORKER" in text
     assert "A new session has started" in text
-    assert "previous loop position is gone" in text
+    assert "answers and loop position are gone" in text
     assert "AFTER REPLACEMENT" in text
     assert "WHAT WENT WRONG" not in text
     assert "Ask: What happened to my refund?" in text
@@ -125,13 +125,13 @@ def test_naive_agent_loop_reaches_the_refund_before_stripe_is_called() -> None:
     assert "AGENT LOOP" in text
     assert "✓ Damage: Split seam" in text
     assert "→ Next: issue refund" in text
-    assert "NEXT ACTION NOT SAVED" in text
-    assert "loop position exists only in this Worker" in text
+    assert "WORK NOT SAVED" in text
+    assert "answers and next action exist only in this Worker" in text
     assert "Press Enter to replace this Worker" in text
     assert "crash" not in text.lower()
 
 
-def test_naive_status_check_cannot_recover_loop_position_from_stripe() -> None:
+def test_naive_status_check_cannot_recover_working_memory_from_stripe() -> None:
     frame = _demo_frame(
         {
             "user_message": "Did I get my refund?",
@@ -139,10 +139,6 @@ def test_naive_status_check_cannot_recover_loop_position_from_stripe() -> None:
             "memory": {"tenure_days": 824, "prior_refunds": 1},
             "_status_checked": True,
             "_refund_missing": True,
-            "_remembered_steps": [
-                {"kind": "answer", "question_id": "item_opened", "result": "Yes"},
-                {"kind": "answer", "question_id": "damage", "result": "Split seam"},
-            ],
         },
         [],
         stage_mode=True,
@@ -152,11 +148,11 @@ def test_naive_status_check_cannot_recover_loop_position_from_stripe() -> None:
     text = output.getvalue()
 
     assert "Let me check Stripe" in text
-    assert "I remember your answers" in text
+    assert "I lost your return answers" in text
     assert "No refund request reached Stripe" in text
     assert "Please start the return again" in text
     assert "THE CUSTOMER RESTARTS THE LOOP" in text
-    assert "Neither record says this loop is active" in text
+    assert "Worker held the answers" in text
     assert "DUPLICATE REFUND" not in text
 
 

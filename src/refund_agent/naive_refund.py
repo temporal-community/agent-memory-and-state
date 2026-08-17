@@ -1,9 +1,9 @@
 """Demo 1: an autonomous loop without durable execution state.
 
 The agent asks questions, observes answers, performs lookups, and chooses its
-next action. Its Worker then disappears before calling the refund system.
-Memory may retain customer facts and Stripe correctly retains the paid charge
-with no refund, but neither owns the interrupted loop's execution position.
+next action. Its Worker then disappears before calling the refund system. Its
+process-local working memory disappears too. Stripe correctly retains the paid
+charge with no refund, but it does not own the interrupted agent loop.
 """
 
 from __future__ import annotations
@@ -289,18 +289,9 @@ def _demo_frame(agent: dict, ledger: list, *, stage_mode: bool = False):
             left.append(
                 "REPLACEMENT WORKER\n"
                 "A new session has started.\n"
-                "The previous loop position is gone.",
+                "The answers and loop position are gone.",
                 style="yellow",
             )
-            remembered = agent.get("_remembered_steps") or []
-            if remembered:
-                left.append("\n\nMEMORY RETURNED\n", style="bold blue")
-                for step in remembered:
-                    label = {
-                        "item_opened": "Opened",
-                        "damage": "Damage",
-                    }.get(step.get("question_id"), "Answer")
-                    left.append(f"  {label}: {step.get('result')}\n", style="blue")
         else:
             left.append("How can I help?", style="dim")
     elif agent.get("_status_checked"):
@@ -311,11 +302,9 @@ def _demo_frame(agent: dict, ledger: list, *, stage_mode: bool = False):
         left.append("AGENT\n", style="bold cyan")
         left.append("  Let me check Stripe.\n\n")
         if agent.get("_refund_missing", not ledger):
-            if agent.get("_remembered_steps"):
-                left.append("MEMORY\n", style="bold blue")
-                left.append("  I remember your answers.\n\n", style="blue")
             left.append("ANSWER\n", style="bold yellow")
             left.append("  No refund request reached Stripe.\n", style="bold")
+            left.append("  I lost your return answers.\n", style="yellow")
             left.append("  Please start the return again.\n", style="yellow")
         else:
             left.append("ANSWER\n", style="bold green")
@@ -359,20 +348,20 @@ def _demo_frame(agent: dict, ledger: list, *, stage_mode: bool = False):
     header = Panel(header_text, border_style="cyan")
     if agent.get("_status_checked") and not ledger:
         explanation = (
-            "Memory kept what Nyghtowl said. Stripe proves no refund exists.\n"
-            "Neither record says this loop is active or where it should resume."
+            "Stripe kept the payment record. The Worker held the answers and\n"
+            "the loop position. Both disappeared with it."
         )
         explanation_title = "THE CUSTOMER RESTARTS THE LOOP"
     elif any(step.get("kind") == "ready" for step in agent.get("_loop_steps") or []):
         explanation = (
             "The agent chose its next action: issue the refund.\n"
-            "That loop position exists only in this Worker."
+            "Its answers and next action exist only in this Worker."
         )
-        explanation_title = "NEXT ACTION NOT SAVED"
+        explanation_title = "WORK NOT SAVED"
     elif agent.get("_restarted"):
         explanation = (
             "Stripe correctly says PAID with no refund.\n"
-            "The agent loop disappeared with the Worker."
+            "The answers and agent loop disappeared with the Worker."
         )
         explanation_title = "AFTER REPLACEMENT"
     else:

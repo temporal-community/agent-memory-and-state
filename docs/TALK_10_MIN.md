@@ -2,14 +2,14 @@
 
 ## North star
 
-> An agent can remember everything the customer said and still lose the work
-> they submitted.
+> An agent can know exactly what to do and still lose the work a customer
+> submitted.
 
 The audience should leave with three ideas:
 
 1. Context, memory, and state can all inform an agent.
-2. Memory can retain observations and Stripe can prove what reached Stripe
-   without either record owning the autonomous loop's position.
+2. Process-local working memory can disappear, while Stripe only proves what
+   reached Stripe; neither gives a replacement Worker the loop's position.
 3. Temporal lets a reloaded agent reconnect to that loop's completed steps and
    next action. A stable identity also connects later retries to Stripe.
 
@@ -57,8 +57,9 @@ that the reasoning turn was live.
 **Say**
 
 “Agents are getting much better at remembering: larger context windows,
-retrieval, summaries, and long-term memory. But an agent can remember everything
-the customer said and still lose the work they submitted.”
+retrieval, summaries, and long-term memory. But working memory is often still
+inside one process. An agent can know exactly what to do and still lose the work
+a customer submitted.”
 
 “I am going to replace a real Worker after an agent asks questions, performs
 lookups, and chooses the refund as its next action—but before Stripe receives
@@ -115,16 +116,16 @@ called.”
 
 **Action**
 
-The screen reloads with `REPLACEMENT WORKER`. Memory can recall the two answers,
-and Stripe still shows its authoritative state. Ask, “What happened to my
-refund?” Pause on the answer that no request reached Stripe and the return must
-start again.
+The screen reloads with `REPLACEMENT WORKER`. The process-local answers and loop
+position are gone; Stripe still shows its authoritative state. Ask, “What
+happened to my refund?” Pause on the answer that no request reached Stripe and
+the return must start again.
 
 **Say**
 
-“Both records are correct. Memory knows what Nyghtowl said. Stripe knows no
-refund happened. Neither record says this loop is active, which lookups count as
-completed work, or which action should resume. The customer restarts the loop.”
+“Stripe's record is correct: no refund happened. But Stripe never owned the
+customer's answers or the agent's progress. Those lived in the Worker, so the
+customer restarts the loop.”
 
 **Checkpoint:** `THE CUSTOMER RESTARTS THE LOOP` must be visible by **3:15**.
 
@@ -132,13 +133,14 @@ completed work, or which action should resume. The customer restarts the loop.�
 
 **Ask the audience**
 
-“Memory has the answers. Stripe says paid and no refund. Which one tells the new
-agent to continue at ‘issue refund’?”
+“Stripe says paid and no refund. What tells the new agent that Nyghtowl already
+answered the questions and the next action was ‘issue refund’?”
 
 Pause briefly.
 
-“Neither. Memory helps the agent reason. Effect state says what changed in the
-world. Execution state says where this particular autonomous loop stands.”
+“Nothing does. Working memory helped the old agent reason, but disappeared with
+it. Effect state says what changed in the world. Execution state says where
+this particular autonomous loop stands.”
 
 **Action**
 
@@ -148,8 +150,8 @@ Press Enter to prepare the durable version.
 
 **Say before sending the request**
 
-“Now Temporal owns the loop's execution progress. Memory still owns recalled
-information, and Stripe still owns the payment and refund.”
+“Now the agent still uses working memory to reason, Stripe still owns the
+payment and refund, and Temporal owns the submitted loop and its progress.”
 
 **Action**
 
@@ -191,9 +193,10 @@ complete.” Point right to Stripe's successful refund.
 
 **Say**
 
-“On the naive side, memory and Stripe both had right answers, but neither resumed
-the loop. Here the replacement Worker reconnects to the same autonomous work,
-continues at its next action, and can say, ‘Your refund is complete.’”
+“On the naive side, the working memory disappeared and Stripe only knew that no
+refund had arrived. Here the replacement Worker reconnects to the same
+autonomous work, continues at its next action, and can say, ‘Your refund is
+complete.’”
 
 **Checkpoint:** The recovered result should be visible by **6:30**.
 
@@ -309,10 +312,11 @@ recover it.”
 **Why not query Stripe before refunding?**
 
 The naive replacement agent does query Stripe. Stripe correctly says the charge
-is paid and no refund exists. Memory can also recall the answers. Neither record
-owns the interrupted loop or says which action should resume. For a later retry,
-a separate read and write can also race, so a stable idempotency key remains
-important.
+is paid and no refund exists, but it never received the customer answers or the
+agent's progress. A persisted memory system could restore those facts, but it
+still would not own the interrupted operation or say which action must resume.
+For a later retry, a separate read and write can also race, so a stable
+idempotency key remains important.
 
 **Could Stripe handle the retry without Temporal?**
 

@@ -26,10 +26,11 @@ model.
   answer, ask what was damaged, observe the answer, look up the order and refund
   history, then choose `issue refund` as its next action. The Worker disappears
   before Stripe is called.
-- After naive replacement, memory may recall Nyghtowl's answers and Stripe
-  correctly retains `PAID` with no refund. Neither record proves that this loop
-  is active or says which action should resume. Never imply Stripe received or
-  lost a refund request at this boundary.
+- After naive replacement, the process-local working memory is gone, including
+  Nyghtowl's answers and the loop's next action. Stripe correctly retains
+  `PAID` with no refund, but it does not own the customer intake or the loop's
+  progress. Never imply Stripe received or lost a refund request at this
+  boundary.
 - The durable agent runs the same loop. Customer answers are Signals, lookups are
   Activities, and the next action is Workflow state. After replacement, the
   reloaded agent resumes at `issue refund` without repeating questions or
