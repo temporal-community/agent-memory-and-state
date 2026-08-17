@@ -14,8 +14,10 @@ still forget the work.**
 
 The same refund request goes through two plain-Python agents. The naive agent
 rebuilds its context and retrieves the same facts after a Worker restart, but
-refunds the customer twice. The durable agent uses Temporal for execution state
-and Stripe for effect state, so two calls resolve to one refund.
+needs the customer to ask again and may refund them twice. The durable agent
+reconnects to the existing Temporal Workflow, resumes the unresolved work, and
+can report completion without another customer request. Stripe remains the
+effect owner, so a retry with the same identity still resolves to one refund.
 
 There is no agent framework. The point is to make the boundary between context,
 memory, and authoritative state visible.
@@ -26,12 +28,17 @@ memory, and authoritative state visible.
 
 [Watch or download the MP4 version](assets/demo-reel.mp4).
 
+The reel shows the effect-safety backstop. The guided stage adds the primary
+customer-facing payoff: the reloaded agent answers without asking the customer
+to submit the refund again.
+
 | Moment | Naive agent | Durable agent |
 | --- | --- | --- |
 | **Before the request** | Empty process, ready for work | Empty process, ready for work |
 | **After the refund call** | The effect exists; its separate completion marker was not written | Temporal records the attempt; Stripe records the effect |
 | **Worker disappears** | A new process sees no completion record | The process view disappears; both authoritative records remain |
-| **Worker returns** | Acts again: **two refunds** | Replays or retries with one key: **one refund** |
+| **Agent reloads** | The customer asks again; the agent may act again | Reconnects to the same Workflow; **no second request** |
+| **Uncertain effect resolves** | A new operation may create a second refund | A retry keeps the same identity; **one refund** |
 
 ## The boundary that matters
 
@@ -77,6 +84,8 @@ exactly-once misconception.
 - Persisting a completion marker after an external effect does not close the
   failure gap between the two systems.
 - A durable Workflow records where the work stands across Worker restarts.
+- A reloaded agent can reconnect to that Workflow and report running or
+  completed work instead of starting a new operation.
 - Stripe remains authoritative about whether the refund exists.
 - One Workflow identity can become one effect idempotency key.
 - Durable execution does not make effects exactly once; it lets a retry ask the
@@ -179,6 +188,15 @@ requires a Stripe `sk_test_` or `rk_test_` key. Live Stripe keys are rejected.
 Put local values in `.env`; exported shell variables take precedence.
 
 ## Read the payoff
+
+The primary payoff is customer-facing:
+
+> The naive agent needs the customer to ask again. The reloaded durable agent
+> reconnects to the existing work and says, “Your refund is complete.”
+
+The screenshots below show the supporting effect-safety result. Stripe makes a
+repeated call safe; Temporal remembers that the unresolved step still needs to
+finish after the original Worker disappears.
 
 | Uncoordinated progress | Authoritative state |
 | --- | --- |

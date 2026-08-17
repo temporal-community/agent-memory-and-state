@@ -126,6 +126,24 @@ and durable execution does not create exactly-once effects. Temporal supplies a
 durable attempt record, identity, and recovery point. Stripe uses that identity
 to reconcile the retry with the effect it already owns.
 
+## Why this changes the reloaded agent
+
+The customer-facing value is not only duplicate prevention. Stripe can make a
+repeated call safe when the caller supplies a stable idempotency key. Temporal
+owns a different problem: after the original Worker disappears, it retains the
+record that the logical refund is still running or has completed.
+
+The application must reconnect the reloaded agent to the same Workflow ID. It
+can then surface the Workflow's current status or result instead of treating a
+repeated customer message as a new refund request. At the uncertain boundary,
+Temporal retries the unresolved Activity; Stripe reconciles the stable effect
+identity; and Temporal records the returned result. The agent can then answer,
+“Your refund is complete,” without the customer asking again.
+
+Temporal does not automatically inject that answer into a model or user
+interface. The application is responsible for retaining or deriving the
+Workflow ID and exposing the Workflow result to the reloaded agent.
+
 ## Authorization is the same boundary
 
 The [permission state demo](PERMISSION_DEMO.md) applies the same model to a

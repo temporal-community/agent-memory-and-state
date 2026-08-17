@@ -9,8 +9,9 @@ The audience should leave with three ideas:
 
 1. Context, memory, and state can all inform an agent.
 2. When copies disagree, the owner of the fact is authoritative.
-3. Temporal owns execution progress; the effect system owns whether the world
-   changed. A stable identity connects them during recovery.
+3. Temporal lets a reloaded agent reconnect to existing work; the effect system
+   still owns whether the world changed. A stable identity connects them during
+   recovery.
 
 ## Commands
 
@@ -197,6 +198,9 @@ refund.”
 - Stripe owns whether the refund committed.
 - The Workflow run identity becomes the Stripe idempotency key.”
 
+“That Workflow identity is also how the reloaded agent reconnects to existing
+work instead of starting another refund.”
+
 “Temporal does not promise exactly-once calls. We observed two calls. It gives
 the attempt a durable recovery point and stable identity so the retry can
 reconcile with the system that owns the effect instead of guessing from
@@ -264,8 +268,8 @@ recover it.”
 - **Behind at 3:15:** Ask the audience question without waiting for answers.
 - **Behind at 6:30:** Say the two-owner explanation over the recovered frame.
 - **Behind at 8:30:** Skip the code excerpt entirely.
-- **Never cut:** the `WORKER GONE` pause, “two calls, one refund,” or the final three
-  lines.
+- **Never cut:** `NO NEW CUSTOMER REQUEST`, “Your refund is complete,” or the
+  final three lines.
 
 ## Practice sequence
 
@@ -281,7 +285,7 @@ recover it.”
 
 ## Rehearsal scorecard
 
-| Attempt | Mode | Total | Duplicate by 3:15 | `WORKER GONE` pause | Owners named | No “exactly once” claim | Close from memory | Notes |
+| Attempt | Mode | Total | Duplicate by 3:15 | No-second-request payoff | Owners named | No “exactly once” claim | Close from memory | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 |  |  |  |  |  |  |  |  |
 | 2 |  |  |  |  |  |  |  |  |
@@ -293,6 +297,15 @@ recover it.”
 
 A separate read followed by a write still races with another caller. Retrying
 the same idempotent operation asks the effect owner to reconcile one identity.
+
+**Could Stripe handle the retry without Temporal?**
+
+Stripe can make a repeated call safe when the application supplies the same
+idempotency key. Temporal remembers that the step still needs resolution after
+the original Worker disappears, schedules the retry, preserves the Workflow's
+progress, and exposes the result to the reloaded application. A team can build
+those pieces with a database, queue, scheduler, and state machine; Temporal is
+the durable execution system used here.
 
 **Why not put the done flag in a database?**
 

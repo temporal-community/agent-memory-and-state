@@ -9,6 +9,11 @@ uv run refund-demo stage
 This guide exposes every process and recovery step separately. Use it for
 development, rehearsal, debugging, or a longer technical walkthrough.
 
+The guided stage makes the customer-facing contrast explicit. The naive agent
+opens a blank session and needs the customer to ask again. The durable side
+reloads against the same Workflow, resumes the existing refund, and answers
+“Your refund is complete” without a second customer request.
+
 ## Setup
 
 Prerequisites:
@@ -163,13 +168,19 @@ uv run refund-demo stop demo-refund
 
 ## The uncertain-effect beat
 
-This is the main durability payoff.
+This is the mechanical core of the durability payoff.
 
 The failure lands after Stripe accepts the refund but before the Activity can
 report completion. The process cannot know whether money moved. Temporal owns
 the attempt, Stripe owns the effect, and the retry uses one idempotency key.
 Temporal does not turn the two records into one database transaction; it gives
 the uncertain attempt a durable recovery point and stable identity.
+
+Stripe's idempotency support is what keeps a repeated call from creating a
+second refund. Temporal remembers that the step is unresolved, arranges the
+retry after the Worker disappears, and records the result so a reloaded agent
+can reconnect to the same work. The application must retain or derive the same
+Workflow ID when that agent reloads.
 
 Start the Worker with a visible restart window:
 
