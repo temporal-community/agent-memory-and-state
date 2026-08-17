@@ -112,6 +112,7 @@ def _render_naive_frames(output_dir: Path) -> None:
         "amount": 8000,
     }
     active_agent = {
+        "user_message": "Please refund order 1234",
         "context": {"order": "1234", "amount": 8000, "customer": "42"},
         "memory": {"tenure_days": 824, "prior_refunds": 1},
         "recorded": True,
@@ -122,20 +123,28 @@ def _render_naive_frames(output_dir: Path) -> None:
         "note": "issued re_naive_95b8d412, then wrote a separate done marker",
     }
     frames = [
-        ("01-naive-start.html", _demo_frame({}, []), "Naive demo — ready"),
+        (
+            "01-naive-start.html",
+            _demo_frame({}, [], stage_mode=True),
+            "Naive demo — ready",
+        ),
         (
             "02-naive-refunded.html",
-            _demo_frame(active_agent, [first_refund]),
+            _demo_frame(active_agent, [first_refund], stage_mode=True),
             "Naive demo — one refund",
         ),
         (
             "03-naive-restarted.html",
-            _demo_frame({"_restarted": True}, [first_refund]),
+            _demo_frame({"_restarted": True}, [first_refund], stage_mode=True),
             "Naive demo — Worker restarted",
         ),
         (
             "04-naive-duplicate.html",
-            _demo_frame(duplicate_agent, [first_refund, second_refund]),
+            _demo_frame(
+                duplicate_agent,
+                [first_refund, second_refund],
+                stage_mode=True,
+            ),
             "Naive demo — duplicate refund",
         ),
     ]
@@ -150,9 +159,17 @@ def _render_durable_frames(output_dir: Path) -> None:
         with TemporaryDirectory(prefix="memory-demo-media-") as temporary_dir:
             os.environ["DEMO_STATE_DIR"] = temporary_dir
             tui._worker_alive = lambda: (True, 4242)
-            idle_agent = tui._agent_panel(WORKFLOW_ID)
+            idle_agent = tui._stage_agent_panel(WORKFLOW_ID)
             _export(
-                tui._build(WORKFLOW_ID, idle_agent, _waiting_system_panel()),
+                tui._stage_build(
+                    idle_agent,
+                    tui._stage_system_view(
+                        status=None,
+                        refund=None,
+                        pending_attempt=None,
+                        refund_step_completed=False,
+                    ),
+                ),
                 output_dir / "05-durable-start.html",
                 title="Durable demo — ready",
             )
@@ -163,6 +180,7 @@ def _render_durable_frames(output_dir: Path) -> None:
                     "order_id": "order-1234",
                     "customer_id": "cus_demo_42",
                     "amount_cents": 8000,
+                    "reason": "Please refund order 1234",
                 },
                 "observations": [
                     {"tool": "lookup_order"},
@@ -175,16 +193,15 @@ def _render_durable_frames(output_dir: Path) -> None:
             path.write_text(json.dumps(view), encoding="utf-8")
 
             tui._worker_alive = lambda: (False, 4242)
-            lost_agent = tui._agent_panel(WORKFLOW_ID)
+            lost_agent = tui._stage_agent_panel(WORKFLOW_ID)
             _export(
-                tui._build(
-                    WORKFLOW_ID,
+                tui._stage_build(
                     lost_agent,
-                    _system_panel(
+                    tui._stage_system_view(
                         status="RUNNING",
-                        phase="refund effect in flight",
-                        calls=1,
-                        attempt=1,
+                        refund={"calls": 1},
+                        pending_attempt=1,
+                        refund_step_completed=False,
                     ),
                 ),
                 output_dir / "06-durable-lost.html",
@@ -192,15 +209,15 @@ def _render_durable_frames(output_dir: Path) -> None:
             )
 
             tui._worker_alive = lambda: (True, 5252)
-            recovered_agent = tui._agent_panel(WORKFLOW_ID)
+            recovered_agent = tui._stage_agent_panel(WORKFLOW_ID)
             _export(
-                tui._build(
-                    WORKFLOW_ID,
+                tui._stage_build(
                     recovered_agent,
-                    _system_panel(
+                    tui._stage_system_view(
                         status="COMPLETED",
-                        phase="completed",
-                        calls=2,
+                        refund={"calls": 2},
+                        pending_attempt=None,
+                        refund_step_completed=True,
                     ),
                 ),
                 output_dir / "07-durable-recovered.html",

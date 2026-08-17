@@ -39,19 +39,22 @@ from refund_agent.workflow import RefundWorkflow
 _SERVER_START_TIMEOUT_SECONDS = 20
 _WORKER_START_TIMEOUT_SECONDS = 15
 _DEMO_TIMEOUT_SECONDS = 90
+_DEFAULT_REFUND_REQUEST = (
+    "Please refund order 1234. The plush python arrived with a split seam."
+)
 
 
 def _roles() -> Panel:
     body = Text()
     body.append("CONTEXT  ", style="bold yellow")
-    body.append("what the model sees right now; rebuilt from the request\n")
+    body.append("what the agent can see right now\n")
     body.append("MEMORY   ", style="bold blue")
-    body.append("retained or retrieved information the agent reasons with\n")
+    body.append("what the agent remembers or looks up\n")
     body.append("STATE    ", style="bold green")
-    body.append("an owner's record; informs action and must not be guessed")
+    body.append("the records used to act and recover safely")
     return Panel(
         body,
-        title="Three roles — the same data can cross these boundaries",
+        title="Three things that help an agent act",
         border_style="white",
     )
 
@@ -71,19 +74,15 @@ def _intro() -> Group:
 
 def _closing() -> Group:
     result = Text()
-    result.append("CONTEXT  ", style="bold yellow")
-    result.append("was reconstructed in both demos.\n")
-    result.append("MEMORY   ", style="bold blue")
-    result.append("was retrieved again in both demos.\n")
-    result.append("STATE    ", style="bold green")
-    result.append("let recovery act without treating memory as proof.\n\n")
+    result.append("The agent could rebuild the request and decide again.\n")
+    result.append("Only durable records could recover the work safely.\n\n")
     result.append("Naive: two committed refunds.  ", style="bold red")
     result.append("Durable: two calls, one refund.", style="bold green")
     return Group(
         Panel(result, title="The difference", border_style="green"),
         Panel(
-            "Use memory to reason. Use authoritative state to ground and "
-            "coordinate action.",
+            "The agent's view can disappear. The records needed for safe "
+            "recovery cannot.",
             border_style="white",
         ),
     )
@@ -322,20 +321,27 @@ def _seed_test_payment(amount_cents: int) -> str:
     return str(intent.id)
 
 
-def _show(console: Console, renderable, cue: str) -> None:
+def _show(console: Console, renderable, cue: str) -> str:
     console.clear()
     console.print(renderable)
-    input(f"\n{cue}  ")
+    return input(f"\n{cue}  ")
+
+
+def _ask_for_refund(console: Console, renderable, cue: str) -> str:
+    console.clear()
+    console.print(renderable)
+    request = input(f"\n{cue}\nyou> ").strip()
+    return request or _DEFAULT_REFUND_REQUEST
 
 
 async def _durable_frame(client: Client, workflow_id: str):
-    # Reuse the same renderer as `refund-demo watch`, but keep this stage path
-    # step-driven so the presenter controls every beat with Enter.
+    # The talk path uses plain language. `refund-demo watch` keeps the detailed
+    # execution vocabulary for technical exploration.
     from refund_agent import tui
 
-    agent = tui._agent_panel(workflow_id)
-    system = await tui._system_panel(client, workflow_id)
-    return tui._build(workflow_id, agent, system)
+    agent = tui._stage_agent_panel(workflow_id)
+    system = await tui._stage_system_panel(client, workflow_id)
+    return tui._stage_build(agent, system)
 
 
 async def run(
@@ -372,10 +378,10 @@ async def run(
     try:
         _show(console, _intro(), "Press Enter to begin with the naive agent")
 
-        _show(
+        _ask_for_refund(
             console,
-            _demo_frame({}, []),
-            "Press Enter to send: refund order 1234",
+            _demo_frame({}, [], stage_mode=True),
+            "Ask the agent for a refund",
         )
         with console.status(
             "The naive process is issuing the refund, then crashing..."
@@ -385,10 +391,14 @@ async def run(
                 crash_after_effect=True,
                 amount_cents=amount_cents,
             )
-        _show(
+        repeated_request = _ask_for_refund(
             console,
-            _demo_frame({"_restarted": True}, _naive_ledger(stage_state)),
-            "Press Enter to restart the agent and send the same request",
+            _demo_frame(
+                {"_restarted": True},
+                _naive_ledger(stage_state),
+                stage_mode=True,
+            ),
+            "The new session has no history. Ask for the refund again",
         )
         with console.status("A new process is rebuilding context and memory..."):
             await _run_naive(
@@ -405,20 +415,25 @@ async def run(
             "memory": {"tenure_days": 824, "prior_refunds": 1},
             "recorded": True,
             "note": "new process retrieved the same knowledge and acted again",
+            "user_message": repeated_request,
         }
         _show(
             console,
-            _demo_frame(recovered_naive, _naive_ledger(stage_state)),
+            _demo_frame(
+                recovered_naive,
+                _naive_ledger(stage_state),
+                stage_mode=True,
+            ),
             "Press Enter to run the same failure with durable execution",
         )
 
         with console.status("Preparing Temporal and a private demo Worker..."):
             client = await services.connect_or_start_server()
             await services.start_worker()
-        _show(
+        durable_request = _ask_for_refund(
             console,
             await _durable_frame(client, workflow_id),
-            "Press Enter to send the same refund request",
+            "Ask the Temporal-backed agent for the refund",
         )
 
         payment_intent = "pi_dry_run_demo"
@@ -438,7 +453,7 @@ async def run(
             customer_id="cus_demo_42",
             payment_intent_id=payment_intent,
             amount_cents=amount_cents,
-            reason="The plush python arrived with a split seam",
+            reason=durable_request,
             dry_run=not real,
             fast_recovery=True,
             use_canned_agent=not real_model,

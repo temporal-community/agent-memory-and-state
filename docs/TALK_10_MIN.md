@@ -98,13 +98,12 @@ Point to the agent view on the left and the effect owner on the right.
 
 **Say before sending the request**
 
-“The left side contains the agent's decision view. The right side is the effect
-owner's ledger.”
+“The left side is this agent session. The right side is the refund system.”
 
 **Action**
 
-Press Enter to send the refund. The refund commits and the process exits before
-its separate completion marker is written.
+At the `you>` prompt, ask the agent for the refund in your own words. The refund
+commits and the process exits before its separate completion marker is written.
 
 **Say over the one-refund frame**
 
@@ -114,7 +113,8 @@ done flag written afterward would have the same gap.”
 
 **Action**
 
-Press Enter to restart and send the same request. Pause on `DUPLICATE REFUND`.
+The screen reloads as a new session with no chat history. Ask for the same
+refund again. Pause on `DUPLICATE REFUND`.
 
 **Say**
 
@@ -148,11 +148,12 @@ transaction.”
 
 **Action**
 
-Press Enter to send the request. On the in-flight frame, point out:
+At the `you>` prompt, ask the Temporal-backed agent for the refund. On the
+in-flight frame, point out:
 
-- Temporal: Workflow running, tools recorded, `issue_refund` attempt 1 pending.
-- Effect owner: refund succeeded, one call, one unique refund.
-- The Activity completion is not yet recorded.
+- Temporal: the refund step is still open; the Worker has not reported back.
+- Refund system: the refund succeeded; one call produced one refund.
+- Temporal has not received the completion yet.
 
 **Say**
 
@@ -240,18 +241,18 @@ The effect owner knows whether the world changed.”
 a durable execution owner, and carry one identity across the systems that must
 recover it.”
 
-## Stage key map
+## Stage controls
 
-| Enter | Screen or action | Target time |
+| Control | Screen or action | Target time |
 | --- | --- | --- |
-| 1 | Empty naive agent | 0:45 |
-| 2 | First refund commits; process exits | 1:45 |
-| 3 | New process repeats request; duplicate appears | 2:45 |
-| 4 | Empty durable agent | 3:45 |
-| 5 | Effect accepted; Activity completion uncertain | 4:30 |
-| 6 | Worker hard-killed; `LOST` | 5:15 |
-| 7 | Replacement Worker; two calls, one refund | 6:15 |
-| 8 | Final takeaway | 9:30 |
+| Enter | Empty naive agent | 0:45 |
+| Type refund request | First refund commits; process exits | 1:45 |
+| Type request again | New session repeats decision; duplicate appears | 2:45 |
+| Enter | Empty durable agent | 3:45 |
+| Type refund request | Effect accepted; completion uncertain | 4:30 |
+| Enter | Worker hard-killed; `WORKER GONE` | 5:15 |
+| Enter | Replacement Worker; two calls, one refund | 6:15 |
+| Enter | Final takeaway | 9:30 |
 
 ## If time slips
 

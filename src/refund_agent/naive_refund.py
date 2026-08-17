@@ -161,11 +161,14 @@ def _reset(_args: argparse.Namespace) -> None:
     print(paint("naive ledger and completion records cleared", "dim"))
 
 
-def _process_interactive(agent: dict, ledger: list) -> None:
+def _process_interactive(
+    agent: dict, ledger: list, user_message: str = "Please refund order 1234"
+) -> None:
     # This interactive fixture keeps progress in process to make the loss
     # visible. The scripted path above demonstrates the broader crash gap between
     # an effect and a separate completion write.
     order, amount, customer = "1234", 8000, "42"
+    agent["user_message"] = user_message
     agent["context"] = {"order": order, "amount": amount, "customer": customer}
     agent["memory"] = {"tenure_days": 824, "prior_refunds": 1}
     if agent.get("recorded"):
@@ -177,7 +180,7 @@ def _process_interactive(agent: dict, ledger: list) -> None:
     agent["note"] = f"issued {refund_id}, recorded 'done' in its own process"
 
 
-def _demo_frame(agent: dict, ledger: list):
+def _demo_frame(agent: dict, ledger: list, *, stage_mode: bool = False):
     from rich.layout import Layout
     from rich.panel import Panel
     from rich.text import Text
@@ -187,80 +190,95 @@ def _demo_frame(agent: dict, ledger: list):
         left.append("How can I help you?\n\n", style="bold cyan")
         if agent.get("_restarted"):
             left.append(
-                "the worker restarted (deploy, eviction, OOM).\n"
-                "context can be rebuilt and memory retrieved,\n"
-                "but no coordinated progress record can say\n"
-                "whether the refund already happened",
+                "NEW SESSION\n"
+                "The previous conversation is gone.\n"
+                "Ask for the refund again.",
                 style="yellow",
             )
         else:
             left.append(
-                "waiting for a refund request (type one, or Enter)",
+                "No conversation yet.\nAsk for a refund to begin.",
                 style="dim",
             )
     else:
         context = agent.get("context") or {}
         memory = agent.get("memory") or {}
         amount = (context.get("amount") or 0) / 100
-        left.append("CONTEXT (model input now)\n", style="bold yellow")
+        left.append("YOU\n", style="bold yellow")
+        left.append(f"  {agent.get('user_message', 'Please refund order 1234')}\n\n")
+        left.append("THE AGENT REMEMBERS\n", style="bold blue")
         left.append(
-            f"  Customer {context.get('customer')} requested a refund\n"
-            f"  for order {context.get('order')}, ${amount:.2f}\n\n"
+            f"  Customer {context.get('customer')}: "
+            f"{memory.get('tenure_days')} days, "
+            f"{memory.get('prior_refunds')} prior refund\n"
+            f"  Order {context.get('order')}: ${amount:.2f}\n\n"
         )
-        left.append("MEMORY (retrieved copy for the decision)\n", style="bold blue")
-        left.append(
-            f"  copied customer {context.get('customer')} facts from domain state:\n"
-            f"  {memory.get('tenure_days')} days, "
-            f"{memory.get('prior_refunds')} prior refunds\n\n"
-        )
-        left.append("PROGRESS RECORD (not coordinated)\n", style="bold red")
-        if agent.get("recorded"):
-            left.append(f"  {agent.get('note')}\n")
-        else:
-            left.append("  nothing recorded yet\n", style="dim")
+        left.append("DECISION\n", style="bold cyan")
+        left.append("  Approve the refund\n")
 
     right = Text()
-    right.append(f"{len(ledger)} refund(s) committed\n\n", style="bold")
-    for entry in ledger:
+    right.append(f"REFUNDS ISSUED: {len(ledger)}\n\n", style="bold")
+    for number, entry in enumerate(ledger, start=1):
         amount = entry["amount"] / 100
-        right.append(f"  {entry['refund_id']}  order {entry['order']}  ${amount:.2f}\n")
+        right.append(f"  Refund {number}: order {entry['order']}, ${amount:.2f}\n")
     counts: dict[str, int] = {}
     for entry in ledger:
         counts[entry["order"]] = counts.get(entry["order"], 0) + 1
-    if any(count > 1 for count in counts.values()):
+    duplicate = any(count > 1 for count in counts.values())
+    if duplicate:
         right.append("\nDUPLICATE REFUND\n", style="bold red")
+        right.append("The same order was refunded twice.\n", style="red")
 
     header_text = Text()
-    header_text.append("Demo 1: Naive Refund Agent\n", style="bold")
+    header_text.append("Demo 1: The agent starts over\n", style="bold")
     header_text.append(
-        "CONTEXT + MEMORY inform the decision. Neither proves the effect committed.",
+        "The refund survives the crash. The agent's record of the attempt does not.",
         style="dim",
     )
     header = Panel(header_text, border_style="cyan")
+    if duplicate:
+        explanation = (
+            "The same request produced the same decision twice.\n"
+            "Nothing tied both attempts to one refund."
+        )
+        explanation_title = "WHAT WENT WRONG"
+    elif agent.get("_restarted") and ledger:
+        explanation = (
+            "The refund survived. The conversation did not.\n"
+            "The new session cannot see the previous attempt."
+        )
+        explanation_title = "AFTER THE CRASH"
+    else:
+        explanation = (
+            "What happens if the refund succeeds, then this session disappears?"
+        )
+        explanation_title = "THE QUESTION"
     why = Panel(
-        "- context and memory can repeat a decision, not prove its effect\n"
-        "- a later done marker, even durable, leaves this crash gap\n"
-        "- no stable effect identity lets the owner deduplicate the retry",
-        title="why coordination matters",
+        explanation,
+        title=explanation_title,
         border_style="yellow",
     )
+    controls = (
+        "Type your refund request at the you> prompt"
+        if stage_mode
+        else "Type a refund request    restart / deploy / OOM    reset    quit"
+    )
     footer = Panel(
-        "Enter or a refund request = process    "
-        "simulate agent restart / deploy / OOM    reset    quit",
+        controls,
         border_style="dim",
     )
     layout = Layout()
     layout.split_column(
         Layout(header, name="head", size=4),
         Layout(name="body"),
-        Layout(why, name="why", size=5),
+        Layout(why, name="why", size=4),
         Layout(footer, name="foot", size=3),
     )
     layout["body"].split_row(
         Layout(
             Panel(
                 left,
-                title="AGENT VIEW (in process)",
+                title="THIS AGENT SESSION",
                 border_style="cyan",
             ),
             name="agent",
@@ -268,7 +286,7 @@ def _demo_frame(agent: dict, ledger: list):
         Layout(
             Panel(
                 right,
-                title="EFFECT STATE (durable ledger)",
+                title="REFUND SYSTEM",
                 border_style="green",
             ),
             name="world",
@@ -313,7 +331,7 @@ def _run_interactive() -> None:
             agent.clear()
             ledger.clear()
         elif command in ("", "go") or "refund" in command:
-            _process_interactive(agent, ledger)
+            _process_interactive(agent, ledger, command or "Please refund order 1234")
 
 
 def main() -> None:

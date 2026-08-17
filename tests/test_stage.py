@@ -6,7 +6,14 @@ import pytest
 pytest.importorskip("rich")
 
 from refund_agent.cli import _parser
-from refund_agent.stage import _closing, _naive_ledger, _roles, _Services, run
+from refund_agent.stage import (
+    _ask_for_refund,
+    _closing,
+    _naive_ledger,
+    _roles,
+    _Services,
+    run,
+)
 
 
 class _FakeProcess:
@@ -27,6 +34,14 @@ class _FakeProcess:
     def wait(self, timeout: int) -> int:
         self.running = False
         return 0
+
+
+class _FakeConsole:
+    def clear(self) -> None:
+        pass
+
+    def print(self, _renderable) -> None:
+        pass
 
 
 def test_stage_command_defaults_to_offline_deterministic_mode() -> None:
@@ -55,11 +70,11 @@ def test_stage_role_copy_separates_context_memory_and_state() -> None:
     text = _roles().renderable.plain
 
     assert "CONTEXT" in text
-    assert "what the model sees" in text
+    assert "what the agent can see" in text
     assert "MEMORY" in text
-    assert "agent reasons with" in text
+    assert "remembers or looks up" in text
     assert "STATE" in text
-    assert "must not be guessed" in text
+    assert "act and recover safely" in text
 
 
 def test_stage_closing_states_the_observable_outcome() -> None:
@@ -67,6 +82,22 @@ def test_stage_closing_states_the_observable_outcome() -> None:
 
     assert "two committed refunds" in panels[0].renderable.plain
     assert "two calls, one refund" in panels[0].renderable.plain
+
+
+def test_stage_accepts_a_spoken_refund_request(monkeypatch) -> None:
+    monkeypatch.setattr("builtins.input", lambda _prompt: "refund my plush python")
+
+    request = _ask_for_refund(_FakeConsole(), object(), "Ask for a refund")
+
+    assert request == "refund my plush python"
+
+
+def test_stage_keeps_enter_as_a_refund_shortcut(monkeypatch) -> None:
+    monkeypatch.setattr("builtins.input", lambda _prompt: "")
+
+    request = _ask_for_refund(_FakeConsole(), object(), "Ask for a refund")
+
+    assert "refund order 1234" in request
 
 
 def test_stage_reads_scripted_naive_ledger(tmp_path) -> None:
