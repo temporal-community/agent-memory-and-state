@@ -1,9 +1,9 @@
-"""Demo 1: accepted application input without durable execution state.
+"""Demo 1: an autonomous loop without durable execution state.
 
-The Worker accepts a completed return form, then disappears before calling the
-refund system. Stripe correctly retains the paid charge and no refund. It cannot
-reconstruct form answers it never received. A replacement agent can check
-Stripe, but the customer must enter the return details again.
+The agent asks questions, observes answers, performs lookups, and chooses its
+next action. Its Worker then disappears before calling the refund system.
+Memory may retain customer facts and Stripe correctly retains the paid charge
+with no refund, but neither owns the interrupted loop's execution position.
 """
 
 from __future__ import annotations
@@ -29,6 +29,12 @@ def paint(text: str, name: str) -> str:
 
 def _line(label: str, text: str) -> None:
     print(f"{label:<15}| {text}", flush=True)
+
+
+def _loop_event(payload: dict[str, str]) -> None:
+    """Emit a machine-readable step while keeping the subprocess real."""
+
+    _line("AGENT STEP", json.dumps(payload, sort_keys=True))
 
 
 def _money(cents: int) -> str:
@@ -76,6 +82,63 @@ def _existing_refund(order: str) -> dict | None:
     )
 
 
+def _run_interactive_agent_loop() -> None:
+    """Choose questions and lookups until the next action is the refund."""
+
+    answers: dict[str, str] = {}
+    questions = (
+        ("item_opened", "Was the package opened?", "Yes"),
+        ("damage", "What was damaged?", "Split seam"),
+    )
+    for question_id, question, suggested_answer in questions:
+        if question_id in answers:
+            continue
+        _loop_event(
+            {
+                "kind": "question",
+                "question_id": question_id,
+                "question": question,
+                "suggested_answer": suggested_answer,
+            }
+        )
+        answer = sys.stdin.readline()
+        if not answer:
+            raise RuntimeError("customer input closed during the agent loop")
+        answers[question_id] = answer.strip() or suggested_answer
+        _loop_event(
+            {
+                "kind": "answer",
+                "question_id": question_id,
+                "question": question,
+                "result": answers[question_id],
+            }
+        )
+
+    _loop_event(
+        {
+            "kind": "tool",
+            "tool": "lookup_order",
+            "label": "Found order",
+            "result": "plush python",
+        }
+    )
+    _loop_event(
+        {
+            "kind": "tool",
+            "tool": "lookup_customer_history",
+            "label": "Checked refund history",
+            "result": "clean",
+        }
+    )
+    _loop_event(
+        {
+            "kind": "ready",
+            "label": "Next action",
+            "result": "issue refund",
+        }
+    )
+
+
 def _refund(args: argparse.Namespace) -> None:
     order = args.order
     amount = args.amount_cents
@@ -109,14 +172,17 @@ def _refund(args: argparse.Namespace) -> None:
         )
         return
 
-    _line(
-        "RETURN FORM",
-        f"opened={args.opened}; damage={args.damage}; refund_to={args.refund_to}",
-    )
+    if args.interactive_loop:
+        _run_interactive_agent_loop()
+    else:
+        _line(
+            "RETURN FORM",
+            f"opened={args.opened}; damage={args.damage}; refund_to={args.refund_to}",
+        )
     if args.hold_before_effect:
         _line(
             "REQUEST BUFFER",
-            "accepted by this Worker; not durably saved; Stripe not called",
+            "next action held by this Worker; Stripe not called",
         )
         sys.stdout.flush()
         while True:
@@ -187,13 +253,26 @@ def _process_interactive(
         agent["_refund_missing"] = not any(item["order"] == order for item in ledger)
         agent["note"] = "checked Stripe after a new customer message"
         return
-    agent["_form_accepted"] = True
-    agent["return_form"] = {
-        "item_opened": "Yes",
-        "damage": "Split seam",
-        "refund_destination": "Original card",
-    }
-    agent["note"] = "accepted the form in this process; Stripe not called"
+    agent["_loop_steps"] = [
+        {
+            "kind": "answer",
+            "question_id": "item_opened",
+            "result": "Yes",
+        },
+        {"kind": "answer", "question_id": "damage", "result": "Split seam"},
+        {
+            "kind": "tool",
+            "label": "Looked up order",
+            "result": "PAID",
+        },
+        {
+            "kind": "tool",
+            "label": "Checked refund history",
+            "result": "clean",
+        },
+        {"kind": "ready", "label": "Next action", "result": "issue refund"},
+    ]
+    agent["note"] = "agent chose the refund; loop position remains in this process"
 
 
 def _demo_frame(agent: dict, ledger: list, *, stage_mode: bool = False):
@@ -210,9 +289,18 @@ def _demo_frame(agent: dict, ledger: list, *, stage_mode: bool = False):
             left.append(
                 "REPLACEMENT WORKER\n"
                 "A new session has started.\n"
-                "The submitted return form is gone.",
+                "The previous loop position is gone.",
                 style="yellow",
             )
+            remembered = agent.get("_remembered_steps") or []
+            if remembered:
+                left.append("\n\nMEMORY RETURNED\n", style="bold blue")
+                for step in remembered:
+                    label = {
+                        "item_opened": "Opened",
+                        "damage": "Damage",
+                    }.get(step.get("question_id"), "Answer")
+                    left.append(f"  {label}: {step.get('result')}\n", style="blue")
         else:
             left.append("How can I help?", style="dim")
     elif agent.get("_status_checked"):
@@ -223,28 +311,28 @@ def _demo_frame(agent: dict, ledger: list, *, stage_mode: bool = False):
         left.append("AGENT\n", style="bold cyan")
         left.append("  Let me check Stripe.\n\n")
         if agent.get("_refund_missing", not ledger):
+            if agent.get("_remembered_steps"):
+                left.append("MEMORY\n", style="bold blue")
+                left.append("  I remember your answers.\n\n", style="blue")
             left.append("ANSWER\n", style="bold yellow")
             left.append("  No refund request reached Stripe.\n", style="bold")
-            left.append("  Please enter the return details again.\n", style="yellow")
+            left.append("  Please start the return again.\n", style="yellow")
         else:
             left.append("ANSWER\n", style="bold green")
             left.append(f"  Yes — your ${amount:.2f} refund succeeded.\n", style="bold")
     else:
+        from refund_agent.tui import _append_loop_steps
+
         context = agent.get("context") or {}
         amount = (context.get("amount") or 0) / 100
         left.append("YOU\n", style="bold yellow")
         left.append(f"  {agent.get('user_message', 'Please refund order 1234')}\n\n")
-        form = agent.get("return_form") or {}
-        if agent.get("_form_accepted"):
-            left.append("RETURN FORM — SUBMITTED\n", style="bold cyan")
-            left.append(f"  Opened: {form.get('item_opened', 'Yes')}\n")
-            left.append(f"  Damage: {form.get('damage', 'Split seam')}\n")
-            left.append(
-                f"  Refund to: {form.get('refund_destination', 'Original card')}\n\n"
+        if agent.get("_loop_steps") or agent.get("_pending_question"):
+            _append_loop_steps(
+                left,
+                agent.get("_loop_steps") or [],
+                pending_question=agent.get("_pending_question"),
             )
-            left.append("AGENT\n", style="bold cyan")
-            left.append("  I have your return details.\n")
-            left.append("  Starting the refund...\n", style="yellow")
         else:
             left.append(f"  Order {context.get('order')}: ${amount:.2f}\n")
 
@@ -263,41 +351,43 @@ def _demo_frame(agent: dict, ledger: list, *, stage_mode: bool = False):
         right.append("  Status: succeeded\n")
 
     header_text = Text()
-    header_text.append("Demo 1: The agent starts over\n", style="bold")
+    header_text.append("Demo 1: The agent loop starts over\n", style="bold")
     header_text.append(
-        "The Worker accepts a return form, then disappears before Stripe is called.",
+        "The agent asks, observes, and looks things up before choosing the refund.",
         style="dim",
     )
     header = Panel(header_text, border_style="cyan")
     if agent.get("_status_checked") and not ledger:
         explanation = (
-            "Stripe can prove that no refund exists.\n"
-            "It cannot recover return details it never received."
+            "Memory kept what Nyghtowl said. Stripe proves no refund exists.\n"
+            "Neither record says this loop is active or where it should resume."
         )
-        explanation_title = "THE CUSTOMER MUST START OVER"
-    elif agent.get("_form_accepted"):
+        explanation_title = "THE CUSTOMER RESTARTS THE LOOP"
+    elif any(step.get("kind") == "ready" for step in agent.get("_loop_steps") or []):
         explanation = (
-            "The form exists only in this Worker.\n"
-            "Stripe still has a paid order and no refund request."
+            "The agent chose its next action: issue the refund.\n"
+            "That loop position exists only in this Worker."
         )
-        explanation_title = "ACCEPTED, BUT NOT SAVED"
+        explanation_title = "NEXT ACTION NOT SAVED"
     elif agent.get("_restarted"):
         explanation = (
             "Stripe correctly says PAID with no refund.\n"
-            "The return form disappeared with the Worker."
+            "The agent loop disappeared with the Worker."
         )
         explanation_title = "AFTER REPLACEMENT"
     else:
-        explanation = (
-            "What happens after the form is submitted but before Stripe is called?"
-        )
+        explanation = "What happens when an autonomous loop loses its Worker?"
         explanation_title = "THE QUESTION"
     why = Panel(
         explanation,
         title=explanation_title,
         border_style="yellow",
     )
-    if stage_mode and agent.get("_form_accepted"):
+    if stage_mode and agent.get("_pending_question"):
+        controls = "Answer the agent's next question"
+    elif stage_mode and any(
+        step.get("kind") == "ready" for step in agent.get("_loop_steps") or []
+    ):
         controls = "Press Enter to replace this Worker"
     elif stage_mode and agent.get("_status_checked"):
         controls = "Press Enter to compare with durable execution"
@@ -378,11 +468,16 @@ def main() -> None:
     refund.add_argument("--opened", default="Yes")
     refund.add_argument("--damage", default="Split seam")
     refund.add_argument("--refund-to", default="Original card")
+    refund.add_argument(
+        "--interactive-loop",
+        action="store_true",
+        help="let the agent choose and ask each return question",
+    )
     boundary = refund.add_mutually_exclusive_group()
     boundary.add_argument(
         "--hold-before-effect",
         action="store_true",
-        help="wait after accepting the form but before calling the refund system",
+        help="wait after choosing the refund but before calling the refund system",
     )
     boundary.add_argument(
         "--exit-after-effect",

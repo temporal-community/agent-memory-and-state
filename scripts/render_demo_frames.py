@@ -19,6 +19,13 @@ from refund_agent.naive_refund import _demo_frame
 from refund_agent.settings import agent_view_path
 
 WORKFLOW_ID = "demo-recovery"
+DEMO_LOOP_STEPS = [
+    {"kind": "answer", "question_id": "item_opened", "result": "Yes"},
+    {"kind": "answer", "question_id": "damage", "result": "Split seam"},
+    {"kind": "tool", "label": "Found order", "result": "plush python"},
+    {"kind": "tool", "label": "Checked refund history", "result": "clean"},
+    {"kind": "ready", "label": "Next action", "result": "issue refund"},
+]
 
 
 def _export(renderable: object, destination: Path, *, title: str) -> None:
@@ -105,13 +112,8 @@ def _render_naive_frames(output_dir: Path) -> None:
         "user_message": "Please refund order 1234",
         "context": {"order": "1234", "amount": 8000, "customer": "Nyghtowl"},
         "memory": {"tenure_days": 824, "prior_refunds": 1},
-        "_form_accepted": True,
-        "return_form": {
-            "item_opened": "Yes",
-            "damage": "Split seam",
-            "refund_destination": "Original card",
-        },
-        "note": "accepted in this Worker before Stripe was called",
+        "_loop_steps": DEMO_LOOP_STEPS,
+        "note": "agent chose the refund before Stripe was called",
     }
     status_agent = {
         "user_message": "What happened to my refund?",
@@ -119,6 +121,10 @@ def _render_naive_frames(output_dir: Path) -> None:
         "memory": {"tenure_days": 824, "prior_refunds": 1},
         "_status_checked": True,
         "_refund_missing": True,
+        "_remembered_steps": [
+            {"kind": "answer", "question_id": "item_opened", "result": "Yes"},
+            {"kind": "answer", "question_id": "damage", "result": "Split seam"},
+        ],
         "note": "new process checked Stripe after the customer asked",
     }
     frames = [
@@ -128,19 +134,26 @@ def _render_naive_frames(output_dir: Path) -> None:
             "Naive demo — ready",
         ),
         (
-            "02-naive-form-submitted.html",
+            "02-naive-loop-ready.html",
             _demo_frame(active_agent, [], stage_mode=True),
-            "Naive demo — form submitted",
+            "Naive demo — next action chosen",
         ),
         (
             "03-naive-restarted.html",
-            _demo_frame({"_restarted": True}, [], stage_mode=True),
+            _demo_frame(
+                {
+                    "_restarted": True,
+                    "_remembered_steps": status_agent["_remembered_steps"],
+                },
+                [],
+                stage_mode=True,
+            ),
             "Naive demo — replacement Worker",
         ),
         (
-            "04-naive-start-over.html",
+            "04-naive-loop-restarts.html",
             _demo_frame(status_agent, [], stage_mode=True),
-            "Naive demo — form must be re-entered",
+            "Naive demo — loop must restart",
         ),
     ]
     for filename, renderable, title in frames:
@@ -197,6 +210,7 @@ def _render_durable_frames(output_dir: Path) -> None:
                         refund=None,
                         pending_attempt=None,
                         refund_step_completed=False,
+                        loop_steps=DEMO_LOOP_STEPS,
                     ),
                 ),
                 output_dir / "06-durable-lost.html",
@@ -213,6 +227,7 @@ def _render_durable_frames(output_dir: Path) -> None:
                         refund={"calls": 1},
                         pending_attempt=None,
                         refund_step_completed=True,
+                        loop_steps=DEMO_LOOP_STEPS,
                     ),
                 ),
                 output_dir / "07-durable-recovered.html",

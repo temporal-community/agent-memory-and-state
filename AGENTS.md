@@ -22,15 +22,18 @@ model.
 - Nyghtowl starts with a paid plush-python order. In Stripe test mode, create the
   PaymentIntent before the first refund prompt so `PAID` is a real effect-owner
   record, not stage decoration.
-- The naive Worker accepts a completed return form, then disappears before it
-  calls Stripe. Stripe correctly retains `PAID` and no refund. Never imply that
-  Stripe received or lost a request at this boundary.
-- A replacement agent may query Stripe and correctly report that no refund
-  exists, but Stripe cannot reconstruct form answers it never received. The
-  customer must enter those details again.
-- The durable form is recorded as Workflow input before the Worker is replaced.
-  After replacement, the reloaded agent reconnects to the same Workflow,
-  resumes without form re-entry, and says, “Your refund is complete.”
+- The naive agent visibly loops: ask whether the package was opened, observe the
+  answer, ask what was damaged, observe the answer, look up the order and refund
+  history, then choose `issue refund` as its next action. The Worker disappears
+  before Stripe is called.
+- After naive replacement, memory may recall Nyghtowl's answers and Stripe
+  correctly retains `PAID` with no refund. Neither record proves that this loop
+  is active or says which action should resume. Never imply Stripe received or
+  lost a refund request at this boundary.
+- The durable agent runs the same loop. Customer answers are Signals, lookups are
+  Activities, and the next action is Workflow state. After replacement, the
+  reloaded agent resumes at `issue refund` without repeating questions or
+  restarting the loop, then says, “Your refund is complete.”
 - Do not claim Temporal prevents duplicate refunds by itself. Stripe's
   idempotency support makes the repeated effect call safe; Temporal remembers
   that an unresolved step needs recovery and drives it to completion.
@@ -46,9 +49,9 @@ model.
   “replacement Worker,” and “reloaded agent.” Keep SDK and event-history terms
   in the detailed `refund-demo watch` and inspection paths.
 - Do not make a duplicate refund or an uncertain Stripe effect the main stage
-  payoff. Contrast process-local accepted input with Temporal retaining and
-  resuming accepted application work. Keep the post-effect idempotency case in
-  the manual technical walkthrough.
+  payoff. Contrast remembered facts with Temporal retaining completed
+  observations and the autonomous loop's next action. Keep the post-effect
+  idempotency case in the manual technical walkthrough.
 
 ## Implementation boundaries
 
@@ -112,7 +115,8 @@ in the Rich render tree.
 - `scripts/render_demo_frames.py` generates deterministic HTML frames. Generated
   raster screenshots, GIFs, and videos are separate artifacts; do not claim
   they were updated unless they were regenerated and visually inspected.
-- Treat the customer-facing reloaded-agent screen as the primary payoff.
-  `2 CALLS → 1 REFUND` is supporting evidence about effect safety.
+- Treat `NO REPEATED QUESTIONS`, `NO LOOP RESTART`, and the customer-facing
+  result as the primary payoff. `2 CALLS → 1 REFUND` is supporting evidence
+  about effect safety in the manual technical path.
 - Do not commit `.env`, `.demo-state`, local Temporal databases, stage logs, or
   temporary rendering directories.

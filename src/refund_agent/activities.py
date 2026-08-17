@@ -185,10 +185,43 @@ def _observation(working_memory: list[dict], tool: str) -> dict | None:
     return None
 
 
+def _customer_answer(working_memory: list[dict], question_id: str) -> str | None:
+    for observation in working_memory:
+        if observation.get("tool") != "customer_answer":
+            continue
+        result = observation.get("result") or {}
+        if result.get("question_id") == question_id:
+            return str(result.get("answer") or "")
+    return None
+
+
+def _missing_question_step(working_memory: list[dict]) -> AgentStep | None:
+    if _customer_answer(working_memory, "item_opened") is None:
+        return AgentStep(
+            action="ask_customer",
+            question_id="item_opened",
+            question="Was the package opened?",
+            suggested_answer="Yes",
+        )
+    if _customer_answer(working_memory, "damage") is None:
+        return AgentStep(
+            action="ask_customer",
+            question_id="damage",
+            question="What was damaged?",
+            suggested_answer="Split seam",
+        )
+    return None
+
+
 def _canned_step(request: RefundRequest, working_memory: list[dict]) -> AgentStep:
     # A deterministic policy for the offline demo. The path still varies with the
     # request: a clean, low-value refund clears in two lookups; a larger one digs
     # into the refund policy and escalates.
+    if request.interactive_questions:
+        question = _missing_question_step(working_memory)
+        if question is not None:
+            return question
+
     done = {obs.get("tool") for obs in working_memory}
     if TOOL_ORDER not in done:
         return AgentStep(
@@ -228,6 +261,23 @@ def _canned_step(request: RefundRequest, working_memory: list[dict]) -> AgentSte
 
 
 _TOOL_SCHEMAS = [
+    {
+        "type": "function",
+        "name": "ask_customer",
+        "description": "Ask for one missing return detail before deciding.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "question_id": {
+                    "type": "string",
+                    "enum": ["item_opened", "damage"],
+                },
+                "question": {"type": "string"},
+                "suggested_answer": {"type": "string"},
+            },
+            "required": ["question_id", "question", "suggested_answer"],
+        },
+    },
     {
         "type": "function",
         "name": TOOL_ORDER,
@@ -280,7 +330,10 @@ _TOOL_SCHEMAS = [
 
 _AGENT_INSTRUCTIONS = (
     "You are a refund agent. Decide whether to approve, escalate, or deny a "
-    "refund. Use the tools to gather what you need, then call submit_decision. "
+    "refund. When interactive_questions is true, use ask_customer to collect "
+    "item_opened and damage one at a time unless customer_answer observations "
+    "already contain them. Use the other tools to gather what you need, then "
+    "call submit_decision. "
     "Treat tool results as authoritative. Approve clear, low-value refunds with "
     "a clean customer history. When the policy tool says eligible, approve; do "
     "not require a physical return when return_required is false. Escalate to a "
@@ -368,6 +421,14 @@ def _openai_step(
             rationale=str(args.get("rationale", "")),
             source=source,
         )
+    if call.name == "ask_customer":
+        return AgentStep(
+            action="ask_customer",
+            question_id=str(args.get("question_id", "")),
+            question=str(args.get("question", "")),
+            suggested_answer=str(args.get("suggested_answer", "")),
+            source=source,
+        )
     return AgentStep(
         action="use_tool",
         tool=call.name,
@@ -437,6 +498,14 @@ def _anthropic_step(
             rationale=str(args.get("rationale", "")),
             source=source,
         )
+    if call.name == "ask_customer":
+        return AgentStep(
+            action="ask_customer",
+            question_id=str(args.get("question_id", "")),
+            question=str(args.get("question", "")),
+            suggested_answer=str(args.get("suggested_answer", "")),
+            source=source,
+        )
     return AgentStep(
         action="use_tool",
         tool=call.name,
@@ -462,7 +531,17 @@ def agent_step(request: RefundRequest, working_memory: list[dict]) -> AgentStep:
             f"${request.amount_cents / 100:.2f}, customer {request.customer_id}",
         )
 
-    if request.use_canned_agent:
+    required_question = (
+        _missing_question_step(working_memory)
+        if request.interactive_questions
+        else None
+    )
+    if required_question is not None:
+        # Intake requirements remain stable across model providers. Once the
+        # answers exist, the selected model autonomously chooses lookups and the
+        # final action.
+        step = required_question
+    elif request.use_canned_agent:
         step = _canned_step(request, working_memory)
     else:
         provider = _selected_model_provider(request)
@@ -505,6 +584,11 @@ def agent_step(request: RefundRequest, working_memory: list[dict]) -> AgentStep:
         _line(
             "MODEL REASONING",
             f"turn {turn}: decide -> {step.recommendation} ({step.rationale})",
+        )
+    elif step.action == "ask_customer":
+        _line(
+            "MODEL REASONING",
+            f"turn {turn}: next action -> ask {step.question_id}",
         )
     else:
         _line("MODEL REASONING", f"turn {turn}: plan -> call {step.tool}")

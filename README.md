@@ -12,11 +12,11 @@
 **A visual Python demo showing how an agent can remember the conversation and
 still forget the work.**
 
-The same completed return form goes through two plain-Python agents. The naive
-Worker accepts it, then disappears before calling Stripe. Stripe correctly says
-the order is paid and no refund exists, but it cannot recover form answers it
-never received. The durable agent reconnects to the existing Temporal Workflow,
-resumes the submitted request, and reports completion without form re-entry.
+The same autonomous refund loop runs twice. The agent asks Nyghtowl questions,
+observes the answers, looks up the order and refund history, and chooses its next
+action. The naive Worker disappears before calling Stripe, so its loop position
+is lost. The durable agent reconnects to the existing Temporal Workflow and
+resumes at `issue refund` without repeating questions or restarting the loop.
 
 There is no agent framework. The point is to make the boundary between context,
 memory, and authoritative state visible.
@@ -26,10 +26,10 @@ memory, and authoritative state visible.
 | Moment | Naive agent | Durable agent |
 | --- | --- | --- |
 | **Before the request** | Nyghtowl's plush python is paid in Stripe | The same paid order |
-| **Form submitted** | Accepted only in Worker memory; Stripe has no refund request | Recorded as Temporal Workflow input; Stripe still has no refund request |
-| **Worker disappears** | The completed form disappears | The process view disappears; the submitted form survives |
-| **Agent reloads** | Checks Stripe correctly: paid, no refund. Customer must re-enter the form | Reconnects to the same Workflow; **no form re-entry** |
-| **Outcome** | Nothing can continue the lost application request | The existing work resumes and issues the refund |
+| **Agent loop** | Asks two questions, performs two lookups, chooses `issue refund` | Runs the same observe–reason–act steps |
+| **Worker disappears** | Answers may remain in memory and Stripe says no refund, but the active loop position is gone | Completed observations and next action remain in Workflow state |
+| **Agent reloads** | Correctly checks Stripe, but the customer restarts the return | Reconnects to the same Workflow; **no repeated questions** |
+| **Outcome** | Remembered facts do not resume application work | The loop resumes at `issue refund` |
 
 ## The boundary that matters
 
@@ -55,18 +55,18 @@ recollections is a memory store; a database that owns the current order record
 is authoritative domain state. When copies disagree, the role and owner—not the
 database technology—determine which record wins.
 
-The guided demo uses an even earlier gap: the application accepts a completed
-return form and disappears before calling Stripe. Stripe can prove the payment
-is still paid and that no refund exists. What Stripe cannot own is application
-input it never received: whether the package was opened, what was damaged, and
-where the customer wanted the refund. Without durable execution state, the
-customer must enter that information again.
+The guided demo uses an earlier gap: an agent has observed customer answers,
+completed authoritative lookups, and chosen the refund as its next action when
+its Worker disappears. Memory can recall what Nyghtowl said, and Stripe can
+prove the payment remains paid with no refund. Neither record says that this
+specific loop is active or which step should resume. Without durable execution
+state, the customer starts the return again.
 
 The later boundary is also important: an application can disappear after
 Stripe commits a refund but before the result returns. The manual technical
 walkthrough keeps that case because it requires retrying with a stable effect
-identity. The ten-minute stage path leads with the form-loss case because its
-customer cost is immediately visible.
+identity. The ten-minute stage path leads with the lost-loop-position case
+because its customer cost is immediately visible.
 
 A durable job table or a carefully built state machine can also provide
 execution state. Temporal is the implementation used here: it records the open
@@ -79,12 +79,11 @@ exactly-once misconception.
 
 ## What this demo proves
 
-- Stripe's authoritative record proves that the payment is paid and no refund
-  exists in the naive run.
-- Effect state cannot reconstruct a completed form that never reached the
-  effect owner.
-- Without execution state, recovery requires form re-entry or a custom durable
-  state machine.
+- The agent is a visible loop that chooses questions, tools, and a final action.
+- Memory can retain customer answers without owning the loop's progress.
+- Stripe proves that the payment is paid and no refund exists in the naive run.
+- Without execution state, recovery requires restarting the loop or building a
+  custom durable state machine.
 - A durable Workflow records where the work stands across Worker restarts.
 - A reloaded agent can reconnect to that Workflow and report running or
   completed work instead of starting a new operation.
@@ -108,6 +107,11 @@ for _turn in range(MAX_TURNS):
         args=[request, self.working_memory],
         start_to_close_timeout=timedelta(seconds=60),
     )
+
+    if step.action == "ask_customer":
+        await workflow.wait_condition(answer_arrived)
+        self.working_memory.append(customer_answer)
+        continue
 
     if step.action == "decide":
         decision = RefundDecision(
@@ -163,15 +167,16 @@ uv run refund-demo stage
 The guided runner:
 
 1. Welcomes Nyghtowl back and shows the last plush-python order as `PAID`.
-2. Lets you ask for a refund and answer three prefilled return-form questions.
-3. Replaces the naive Worker after it accepts the form but before it calls
-   Stripe.
-4. Lets you ask what happened. The replacement agent correctly finds a paid
-   order and no refund, but asks you to enter the lost return details again.
-5. Submits the same form as Temporal Workflow input.
-6. Replaces the Worker before Stripe is called; Temporal still shows the saved
-   refund request and return details.
-7. Reloads the agent, resumes the saved form without re-entry, issues the refund,
+2. Lets you ask for a refund while the naive agent chooses and asks two
+   questions, then performs two lookups.
+3. Replaces the Worker after the agent chooses `issue refund` but before Stripe
+   is called.
+4. Shows remembered answers and Stripe's correct `PAID / no refund` record, but
+   no active loop to resume. The customer starts the return again.
+5. Fast-forwards the same questions and lookups through a Temporal Workflow.
+6. Replaces the Worker at the same next action; Temporal still shows two saved
+   answers, two completed lookups, and `Next action: issue refund`.
+7. Reloads the agent, resumes without repeating questions, issues the refund,
    and reports completion.
 
 It uses a deterministic policy and offline Stripe-like ledger by default. It
@@ -210,24 +215,25 @@ that no refund was issued instead of exiting on an empty screen.
 
 The primary payoff is customer-facing:
 
-> Stripe can tell the naive replacement agent that no refund happened. It cannot
-> recreate Nyghtowl's lost return form. The durable agent reconnects to the
-> submitted form and says, “Your refund is complete,” without re-entry.
+> Memory recalls Nyghtowl's answers and Stripe proves no refund happened, but
+> neither resumes the interrupted agent loop. Temporal retains its next action,
+> so the replacement continues without repeated questions.
 
-The naive answer is not wrong. Stripe is authoritative and should be queried.
-The contrast is whether the accepted application work still exists:
+The naive answer is not wrong. Memory and Stripe are both useful. The contrast
+is whether the autonomous work itself still has a position:
 
-| Process-local input | Durable execution |
+| Process-local loop | Durable execution |
 | --- | --- |
-| Stripe says paid with no refund, but it never received the completed form. The customer starts over. | Temporal retains the submitted form, and the replacement Worker continues it without re-entry. |
+| Memory recalls the answers and Stripe says paid with no refund, but no active loop says what comes next. | Temporal retains completed observations and `Next action: issue refund`; the replacement continues without repeating questions. |
 
 The durable side has two owners:
 
 - **Temporal** owns the Activity attempt and execution progress.
 - **Stripe** owns whether the refund committed.
 
-Stripe's paid charge is not a record of a customer's return request. Temporal
-durably records the accepted application work and supplies the recovery point.
+Stripe's paid charge and the agent's remembered answers are not records of the
+loop's execution position. Temporal records the application work and supplies
+the recovery point.
 At the later uncertain-effect boundary, the shared identity also lets a retry
 reconcile with Stripe rather than infer the result from memory.
 

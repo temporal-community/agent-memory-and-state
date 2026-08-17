@@ -14,15 +14,14 @@ class RefundRequest:
     amount_cents: int
     reason: str
     dry_run: bool
-    # Return details are application input, not facts Stripe can reconstruct
-    # from a paid charge. The guided stage stores them in Workflow input so a
-    # replacement Worker can continue without asking the customer again.
-    item_opened: str = "Yes"
-    damage: str = "Split seam"
+    # A normal CLI request may provide these up front. The guided stage leaves
+    # them empty so the agent chooses each question inside its durable loop.
+    item_opened: str | None = "Yes"
+    damage: str | None = "Split seam"
     refund_destination: str = "Original card"
-    # The stage runner pauses after Workflow input is recorded but before the
-    # agent loop or refund effect begins. This makes loss of an accepted request
-    # visible without pretending Stripe received a call that it did not.
+    interactive_questions: bool = False
+    # The stage runner pauses after the agent reaches an approved next action but
+    # before the refund effect begins. This exposes the loop's recovery point.
     hold_before_effect: bool = False
     # When set, hold the run open after the refund is issued (a durable wait) so
     # a Worker can be killed and restarted to show replay skipping a step that is
@@ -76,11 +75,14 @@ class ReturnStatus:
 
 @dataclass(frozen=True)
 class AgentStep:
-    """One turn of the loop: either use a tool or decide."""
+    """One turn: ask the customer, use a tool, or decide."""
 
-    action: str  # use_tool | decide
+    action: str  # ask_customer | use_tool | decide
     tool: str | None = None
     tool_args: dict[str, str] | None = None
+    question_id: str | None = None
+    question: str | None = None
+    suggested_answer: str | None = None
     recommendation: str | None = None  # approve | escalate | deny
     rationale: str | None = None
     source: str = "canned"

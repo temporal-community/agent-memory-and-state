@@ -10,7 +10,7 @@ from refund_agent.settings import agent_view_path
 from refund_agent.stage import (
     _ask_for_refund,
     _closing,
-    _collect_return_form,
+    _drive_naive_loop,
     _live_model_provider,
     _naive_ledger,
     _roles,
@@ -18,13 +18,14 @@ from refund_agent.stage import (
     _start_naive_at_boundary,
     _stop_naive_worker,
     _wait_for_first_effect,
-    _wait_for_naive_request,
     run,
 )
 
 
 class _FakeProcess:
     pid = 4242
+    stdin = None
+    stdout = None
 
     def __init__(self) -> None:
         self.running = True
@@ -130,9 +131,9 @@ def test_stage_role_copy_separates_context_memory_and_state() -> None:
 def test_stage_closing_states_the_observable_outcome() -> None:
     panels = list(_closing().renderables)
 
-    assert "customer had to start over" in panels[0].renderable.plain
-    assert "reloaded agent resumed the submitted form" in panels[0].renderable.plain
-    assert "No form re-entry" in panels[0].renderable.plain
+    assert "agent loop started over" in panels[0].renderable.plain
+    assert "reloaded agent resumed at its next action" in panels[0].renderable.plain
+    assert "No repeated questions" in panels[0].renderable.plain
     assert "One submitted request, one refund" in panels[0].renderable.plain
     assert "Stripe knows what reached Stripe" in panels[1].renderable
     assert "application work" in panels[1].renderable
@@ -167,19 +168,6 @@ def test_stage_can_default_to_the_recovery_question(monkeypatch) -> None:
     assert request == "What happened to my refund?"
 
 
-def test_return_form_prompts_are_prefilled(monkeypatch) -> None:
-    answers = iter(["", "torn wing", "store credit"])
-    monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
-
-    form = _collect_return_form(_FakeConsole(), object())
-
-    assert form == {
-        "item_opened": "Yes",
-        "damage": "torn wing",
-        "refund_destination": "store credit",
-    }
-
-
 def test_stage_reads_scripted_naive_ledger(tmp_path) -> None:
     (tmp_path / "naive-ledger.json").write_text(
         json.dumps(
@@ -201,14 +189,32 @@ def test_stage_reads_scripted_naive_ledger(tmp_path) -> None:
     ]
 
 
-def test_naive_worker_waits_after_accepting_form_but_before_refund(
-    tmp_path,
+def test_naive_worker_runs_questions_and_waits_before_refund(
+    tmp_path, monkeypatch
 ) -> None:
+    answers = iter(["", "torn wing"])
+    monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
     process = _start_naive_at_boundary(tmp_path, amount_cents=8000)
     try:
-        asyncio.run(_wait_for_naive_request(process))
+        steps, customer_answers = asyncio.run(
+            _drive_naive_loop(
+                _FakeConsole(),
+                process,
+                request_text="refund my plush python",
+                amount_cents=8000,
+            )
+        )
 
         assert process.poll() is None
+        assert customer_answers == {"item_opened": "Yes", "damage": "torn wing"}
+        assert [step["kind"] for step in steps] == [
+            "answer",
+            "answer",
+            "tool",
+            "tool",
+            "ready",
+        ]
+        assert steps[-1]["result"] == "issue refund"
         assert _naive_ledger(tmp_path) == []
         assert not (tmp_path / "naive-done-1234.json").exists()
     finally:

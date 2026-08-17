@@ -131,8 +131,8 @@ def _stage_agent_panel(
     workflow_id: str,
     *,
     recovered: bool = False,
-    form: dict[str, str] | None = None,
-    submitted: bool = False,
+    loop_steps: list[dict[str, str]] | None = None,
+    pending_question: dict[str, str] | None = None,
 ) -> Panel:
     """Plain-language Worker view for a general-audience talk."""
 
@@ -144,27 +144,21 @@ def _stage_agent_panel(
             "Its current conversation and working view disappeared.\n\n",
             style="red",
         )
-        body.append("The submitted form is no longer in this process.", style="red")
+        body.append("Its live copy of the agent loop is gone.", style="red")
         return Panel(body, title="THIS WORKER", border_style="red")
 
     if recovered:
-        body.append("NO NEW FORM\nNO RE-ENTRY\n\n", style="bold green")
+        body.append("NO REPEATED QUESTIONS\nNO LOOP RESTART\n\n", style="bold green")
         body.append(
-            "Temporal reconnected this agent to Nyghtowl's submitted request.\n\n",
+            "Temporal reconnected this agent to Nyghtowl's existing work.\n\n",
             style="green",
         )
         body.append("AGENT\n", style="bold cyan")
         body.append("  Your refund is complete.", style="bold")
         return Panel(body, title="RELOADED AGENT", border_style="green")
 
-    if submitted and form:
-        body.append("RETURN FORM — SUBMITTED\n", style="bold cyan")
-        body.append(f"  Opened: {form['item_opened']}\n")
-        body.append(f"  Damage: {form['damage']}\n")
-        body.append(f"  Refund to: {form['refund_destination']}\n\n")
-        body.append("AGENT\n", style="bold cyan")
-        body.append("  I have your return details.\n")
-        body.append("  Starting the refund...", style="yellow")
+    if loop_steps or pending_question:
+        _append_loop_steps(body, loop_steps or [], pending_question=pending_question)
         return Panel(body, title="THIS WORKER", border_style="cyan")
 
     view = _read_agent_view(workflow_id)
@@ -215,6 +209,37 @@ def _stage_agent_panel(
 
 def _mark(done: bool) -> str:
     return "done" if done else "pending"
+
+
+def _append_loop_steps(
+    body: Text,
+    steps: list[dict[str, str]],
+    *,
+    pending_question: dict[str, str] | None = None,
+) -> None:
+    """Render the same compact observe-reason-act loop in both demos."""
+
+    body.append("AGENT LOOP\n", style="bold cyan")
+    for step in steps:
+        kind = step.get("kind")
+        if kind == "answer":
+            label = {
+                "item_opened": "Opened",
+                "damage": "Damage",
+            }.get(step.get("question_id"), "Answer")
+            body.append(f"  ✓ {label}: {step.get('result')}\n", style="green")
+        elif kind == "tool":
+            body.append(
+                f"  ✓ {step.get('label')}: {step.get('result')}\n",
+                style="green",
+            )
+        elif kind == "ready":
+            body.append(f"  → Next: {step.get('result')}\n", style="bold yellow")
+    if pending_question:
+        body.append(
+            f"  → Ask: {pending_question.get('question')}\n",
+            style="bold yellow",
+        )
 
 
 async def _system_panel(client: Client, workflow_id: str) -> Panel:
@@ -308,6 +333,7 @@ def _stage_system_view(
     pending_attempt: int | None,
     refund_step_completed: bool,
     denied: bool = False,
+    loop_steps: list[dict[str, str]] | None = None,
 ) -> Panel:
     """Render the durable side without SDK or systems-design vocabulary."""
 
@@ -331,14 +357,22 @@ def _stage_system_view(
 
     body.append("TEMPORAL\n", style="bold green")
     if refund_step_completed:
-        body.append("  Submitted request completed after recovery.\n")
+        body.append("  Agent loop completed after recovery.\n")
     elif refund is not None:
         body.append("  Refund step is still open.\n")
         body.append("  The Worker has not reported back.\n")
     else:
-        body.append("  Refund request saved.\n")
-        body.append("  Return details saved.\n")
-        body.append("  Waiting to continue.\n")
+        answers = sum(1 for step in loop_steps or [] if step.get("kind") == "answer")
+        lookups = sum(1 for step in loop_steps or [] if step.get("kind") == "tool")
+        body.append("  Agent loop saved.\n")
+        body.append(f"  Customer answers: {answers}\n")
+        body.append(f"  Completed lookups: {lookups}\n")
+        ready = next(
+            (step for step in loop_steps or [] if step.get("kind") == "ready"),
+            None,
+        )
+        if ready:
+            body.append(f"  Next action: {ready.get('result')}\n", style="bold green")
     if pending_attempt is not None:
         body.append(f"  Current attempt: {pending_attempt}\n")
 
@@ -362,7 +396,12 @@ def _stage_system_view(
     return Panel(body, title="WHAT SURVIVES", border_style="green")
 
 
-async def _stage_system_panel(client: Client, workflow_id: str) -> Panel:
+async def _stage_system_panel(
+    client: Client,
+    workflow_id: str,
+    *,
+    loop_steps: list[dict[str, str]] | None = None,
+) -> Panel:
     """Read authoritative records and render the general-audience view."""
 
     handle = client.get_workflow_handle(workflow_id)
@@ -390,6 +429,7 @@ async def _stage_system_panel(client: Client, workflow_id: str) -> Panel:
         refund=find_refund(workflow_id),
         pending_attempt=pending_attempt,
         refund_step_completed=refund_step_completed,
+        loop_steps=loop_steps,
     )
 
 
@@ -450,9 +490,9 @@ def _compact_columns(left: Panel, right: Panel) -> Table:
 
 def _stage_build(agent: Panel, system: Panel) -> Group:
     header = Text()
-    header.append("Demo 2: The work keeps its place\n", style="bold")
+    header.append("Demo 2: The agent loop keeps its place\n", style="bold")
     header.append(
-        "The Worker can disappear. The submitted request keeps its place.",
+        "The Worker can disappear. Completed observations and the next action survive.",
         style="dim",
     )
     return Group(
