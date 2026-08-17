@@ -19,6 +19,13 @@ from refund_agent.naive_refund import _demo_frame
 from refund_agent.settings import agent_view_path
 
 WORKFLOW_ID = "demo-recovery"
+DEMO_LOOP_STEPS = [
+    {"kind": "answer", "question_id": "item_opened", "result": "Yes"},
+    {"kind": "answer", "question_id": "damage", "result": "Split seam"},
+    {"kind": "tool", "label": "Found order", "result": "plush python"},
+    {"kind": "tool", "label": "Checked refund history", "result": "clean"},
+    {"kind": "ready", "label": "Next action", "result": "issue refund"},
+]
 
 
 def _export(renderable: object, destination: Path, *, title: str) -> None:
@@ -101,42 +108,44 @@ def _waiting_system_panel() -> Panel:
 
 
 def _render_naive_frames(output_dir: Path) -> None:
-    first_refund = {
-        "refund_id": "re_naive_4f31a3c1",
-        "order": "1234",
-        "amount": 8000,
-    }
-    second_refund = {
-        "refund_id": "re_naive_95b8d412",
-        "order": "1234",
-        "amount": 8000,
-    }
     active_agent = {
-        "context": {"order": "1234", "amount": 8000, "customer": "42"},
+        "user_message": "Please refund order 1234",
+        "context": {"order": "1234", "amount": 8000, "customer": "Nyghtowl"},
         "memory": {"tenure_days": 824, "prior_refunds": 1},
-        "recorded": True,
-        "note": "issued re_naive_4f31a3c1, recorded 'done' in its own process",
+        "_loop_steps": DEMO_LOOP_STEPS,
+        "note": "agent chose the refund before Stripe was called",
     }
-    duplicate_agent = {
-        **active_agent,
-        "note": "issued re_naive_95b8d412, recorded 'done' in its own process",
+    status_agent = {
+        "user_message": "What happened to my refund?",
+        "context": {"order": "1234", "amount": 8000, "customer": "Nyghtowl"},
+        "_status_checked": True,
+        "_refund_missing": True,
+        "note": "new process checked Stripe after the customer asked",
     }
     frames = [
-        ("01-naive-start.html", _demo_frame({}, []), "Naive demo — ready"),
         (
-            "02-naive-refunded.html",
-            _demo_frame(active_agent, [first_refund]),
-            "Naive demo — one refund",
+            "01-naive-start.html",
+            _demo_frame({}, [], stage_mode=True),
+            "Naive demo — ready",
+        ),
+        (
+            "02-naive-loop-ready.html",
+            _demo_frame(active_agent, [], stage_mode=True),
+            "Naive demo — next action chosen",
         ),
         (
             "03-naive-restarted.html",
-            _demo_frame({"_restarted": True}, [first_refund]),
-            "Naive demo — Worker restarted",
+            _demo_frame(
+                {"_restarted": True},
+                [],
+                stage_mode=True,
+            ),
+            "Naive demo — replacement Worker",
         ),
         (
-            "04-naive-duplicate.html",
-            _demo_frame(duplicate_agent, [first_refund, second_refund]),
-            "Naive demo — duplicate refund",
+            "04-naive-loop-restarts.html",
+            _demo_frame(status_agent, [], stage_mode=True),
+            "Naive demo — loop must restart",
         ),
     ]
     for filename, renderable, title in frames:
@@ -150,9 +159,17 @@ def _render_durable_frames(output_dir: Path) -> None:
         with TemporaryDirectory(prefix="memory-demo-media-") as temporary_dir:
             os.environ["DEMO_STATE_DIR"] = temporary_dir
             tui._worker_alive = lambda: (True, 4242)
-            idle_agent = tui._agent_panel(WORKFLOW_ID)
+            idle_agent = tui._stage_agent_panel(WORKFLOW_ID)
             _export(
-                tui._build(WORKFLOW_ID, idle_agent, _waiting_system_panel()),
+                tui._stage_build(
+                    idle_agent,
+                    tui._stage_system_view(
+                        status=None,
+                        refund=None,
+                        pending_attempt=None,
+                        refund_step_completed=False,
+                    ),
+                ),
                 output_dir / "05-durable-start.html",
                 title="Durable demo — ready",
             )
@@ -163,6 +180,7 @@ def _render_durable_frames(output_dir: Path) -> None:
                     "order_id": "order-1234",
                     "customer_id": "cus_demo_42",
                     "amount_cents": 8000,
+                    "reason": "Please refund order 1234",
                 },
                 "observations": [
                     {"tool": "lookup_order"},
@@ -175,16 +193,16 @@ def _render_durable_frames(output_dir: Path) -> None:
             path.write_text(json.dumps(view), encoding="utf-8")
 
             tui._worker_alive = lambda: (False, 4242)
-            lost_agent = tui._agent_panel(WORKFLOW_ID)
+            lost_agent = tui._stage_agent_panel(WORKFLOW_ID)
             _export(
-                tui._build(
-                    WORKFLOW_ID,
+                tui._stage_build(
                     lost_agent,
-                    _system_panel(
+                    tui._stage_system_view(
                         status="RUNNING",
-                        phase="refund effect in flight",
-                        calls=1,
-                        attempt=1,
+                        refund=None,
+                        pending_attempt=None,
+                        refund_step_completed=False,
+                        loop_steps=DEMO_LOOP_STEPS,
                     ),
                 ),
                 output_dir / "06-durable-lost.html",
@@ -192,15 +210,16 @@ def _render_durable_frames(output_dir: Path) -> None:
             )
 
             tui._worker_alive = lambda: (True, 5252)
-            recovered_agent = tui._agent_panel(WORKFLOW_ID)
+            recovered_agent = tui._stage_agent_panel(WORKFLOW_ID, recovered=True)
             _export(
-                tui._build(
-                    WORKFLOW_ID,
+                tui._stage_build(
                     recovered_agent,
-                    _system_panel(
+                    tui._stage_system_view(
                         status="COMPLETED",
-                        phase="completed",
-                        calls=2,
+                        refund={"calls": 1},
+                        pending_attempt=None,
+                        refund_step_completed=True,
+                        loop_steps=DEMO_LOOP_STEPS,
                     ),
                 ),
                 output_dir / "07-durable-recovered.html",

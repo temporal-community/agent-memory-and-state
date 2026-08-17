@@ -14,9 +14,13 @@ import asyncio
 import json
 import os
 
+from rich import box
+from rich.console import Group
 from rich.layout import Layout
 from rich.live import Live
 from rich.panel import Panel
+from rich.style import Style
+from rich.table import Table
 from rich.text import Text
 from temporalio.client import Client
 from temporalio.service import RPCError
@@ -49,6 +53,16 @@ def _worker_alive() -> tuple[bool, int | None]:
     return True, pid
 
 
+def _read_agent_view(workflow_id: str) -> dict:
+    path = agent_view_path(workflow_id)
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
+
+
 def _agent_panel(workflow_id: str) -> Panel:
     alive, _ = _worker_alive()
     body = Text()
@@ -58,7 +72,7 @@ def _agent_panel(workflow_id: str) -> Panel:
             "context and retrieved memory were this\n"
             "Worker's live view. They can be rebuilt.\n\n"
             "Temporal still owns execution progress;\n"
-            "Stripe still owns the refund outcome.",
+            "the effect owner still owns the refund outcome.",
             style="red",
         )
         return Panel(
@@ -67,13 +81,7 @@ def _agent_panel(workflow_id: str) -> Panel:
             border_style="red",
         )
 
-    path = agent_view_path(workflow_id)
-    view: dict = {}
-    if path.exists():
-        try:
-            view = json.loads(path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            view = {}
+    view = _read_agent_view(workflow_id)
     if not view:
         body.append("How can I help you?\n\n", style="bold cyan")
         body.append(
@@ -97,10 +105,11 @@ def _agent_panel(workflow_id: str) -> Panel:
         f"  customer {context.get('customer_id')}\n"
         f"  amount   {context.get('amount_cents')} cents\n\n"
     )
-    body.append("MEMORY (retrieved for the decision)\n", style="bold blue")
+    body.append("MEMORY (retrieved copies for the decision)\n", style="bold blue")
     if observations:
         for obs in observations:
             body.append(f"  {obs.get('tool')}\n")
+        body.append("  source records remain domain state\n", style="dim")
     else:
         body.append("  nothing retrieved yet\n", style="dim")
     body.append("\n")
@@ -118,8 +127,119 @@ def _agent_panel(workflow_id: str) -> Panel:
     )
 
 
+def _stage_agent_panel(
+    workflow_id: str,
+    *,
+    recovered: bool = False,
+    loop_steps: list[dict[str, str]] | None = None,
+    pending_question: dict[str, str] | None = None,
+) -> Panel:
+    """Plain-language Worker view for a general-audience talk."""
+
+    alive, _ = _worker_alive()
+    body = Text()
+    if not alive:
+        body.append("WORKER GONE\n\n", style="bold red")
+        body.append(
+            "Its current conversation and working view disappeared.\n\n",
+            style="red",
+        )
+        body.append("Its live copy of the agent loop is gone.", style="red")
+        return Panel(body, title="THIS WORKER", border_style="red")
+
+    if recovered:
+        body.append("NO REPEATED QUESTIONS\nNO LOOP RESTART\n\n", style="bold green")
+        body.append(
+            "Temporal reconnected this agent to Nyghtowl's existing work.\n\n",
+            style="green",
+        )
+        body.append("AGENT\n", style="bold cyan")
+        body.append("  Your refund is complete.", style="bold")
+        return Panel(body, title="RELOADED AGENT", border_style="green")
+
+    if loop_steps or pending_question:
+        _append_loop_steps(body, loop_steps or [], pending_question=pending_question)
+        return Panel(body, title="THIS WORKER", border_style="cyan")
+
+    view = _read_agent_view(workflow_id)
+    if not view:
+        body.append("Welcome back, Nyghtowl\n\n", style="bold cyan")
+        body.append("How can I help?", style="dim")
+        return Panel(body, title="THIS WORKER", border_style="cyan")
+
+    context = view.get("context") or {}
+    observations = view.get("observations") or []
+    decision = view.get("decision") or {}
+    amount = int(context.get("amount_cents") or 0) / 100
+    order_id = str(context.get("order_id") or "")
+    display_order_id = order_id.removeprefix("order-")
+
+    body.append("YOU\n", style="bold yellow")
+    body.append(f"  {context.get('reason') or 'Please refund this order'}\n\n")
+    body.append("THE AGENT FOUND\n", style="bold blue")
+    friendly_tools = {
+        "lookup_order": "Order details",
+        "lookup_customer_history": "Customer history",
+        "check_refund_policy": "Refund policy",
+    }
+    if observations:
+        for observation in observations:
+            tool = str(observation.get("tool"))
+            body.append(f"  {friendly_tools.get(tool, 'Requested information')}\n")
+    else:
+        body.append("  Nothing yet\n", style="dim")
+    body.append(f"  Order {display_order_id}: ${amount:.2f}\n\n")
+
+    recommendations = {
+        "approve": "Approve the refund",
+        "escalate": "Ask a person to approve",
+        "deny": "Do not issue the refund",
+    }
+    recommendation = str(decision.get("recommendation") or "")
+    body.append("DECISION\n", style="bold cyan")
+    body.append(f"  {recommendations.get(recommendation, 'Still deciding')}\n")
+    if recommendation == "deny" and decision.get("rationale"):
+        rationale = " ".join(str(decision["rationale"]).split())
+        if len(rationale) > 180:
+            rationale = rationale[:177].rstrip() + "..."
+        body.append("\nWHY\n", style="bold yellow")
+        body.append(f"  {rationale}\n", style="yellow")
+    return Panel(body, title="THIS WORKER", border_style="cyan")
+
+
 def _mark(done: bool) -> str:
     return "done" if done else "pending"
+
+
+def _append_loop_steps(
+    body: Text,
+    steps: list[dict[str, str]],
+    *,
+    pending_question: dict[str, str] | None = None,
+) -> None:
+    """Render the same compact observe-reason-act loop in both demos."""
+
+    body.append("AGENT LOOP\n", style="bold cyan")
+    for step in steps:
+        kind = step.get("kind")
+        if kind == "answer":
+            label = {
+                "item_opened": "Opened",
+                "damage": "Damage",
+            }.get(step.get("question_id"), "Answer")
+            body.append(f"  ✓ {label}: {step.get('result')}\n", style="green")
+        elif kind == "tool":
+            body.append(
+                f"  ✓ {step.get('label')}: {step.get('result')}\n",
+                style="green",
+            )
+        elif kind == "ready":
+            body.append(f"  → Next: {step.get('result')}\n", style="bold yellow")
+    if pending_question:
+        body.append(
+            f"  → Ask: {pending_question.get('question')}\n",
+            style="bold yellow",
+        )
 
 
 async def _system_panel(client: Client, workflow_id: str) -> Panel:
@@ -206,6 +326,113 @@ async def _system_panel(client: Client, workflow_id: str) -> Panel:
     )
 
 
+def _stage_system_view(
+    *,
+    status: str | None,
+    refund: dict | None,
+    pending_attempt: int | None,
+    refund_step_completed: bool,
+    denied: bool = False,
+    loop_steps: list[dict[str, str]] | None = None,
+) -> Panel:
+    """Render the durable side without SDK or systems-design vocabulary."""
+
+    body = Text()
+    if status is None:
+        body.append("TEMPORAL\n", style="bold green")
+        body.append("  No refund request yet.\n\n", style="dim")
+        body.append("STRIPE\n", style="bold green")
+        body.append("  Payment: PAID\n")
+        body.append("  Refund: none\n", style="dim")
+        return Panel(body, title="WHAT SURVIVES", border_style="green")
+
+    if denied:
+        body.append("TEMPORAL\n", style="bold green")
+        body.append("  This request is complete.\n")
+        body.append("  No refund step was started.\n\n")
+        body.append("STRIPE\n", style="bold green")
+        body.append("  Payment: PAID\n")
+        body.append("  Refund: none\n", style="dim")
+        return Panel(body, title="WHAT SURVIVES", border_style="green")
+
+    body.append("TEMPORAL\n", style="bold green")
+    if refund_step_completed:
+        body.append("  Agent loop completed after recovery.\n")
+    elif refund is not None:
+        body.append("  Refund step is still open.\n")
+        body.append("  The Worker has not reported back.\n")
+    else:
+        answers = sum(1 for step in loop_steps or [] if step.get("kind") == "answer")
+        lookups = sum(1 for step in loop_steps or [] if step.get("kind") == "tool")
+        body.append("  Agent loop saved.\n")
+        body.append(f"  Customer answers: {answers}\n")
+        body.append(f"  Completed lookups: {lookups}\n")
+        ready = next(
+            (step for step in loop_steps or [] if step.get("kind") == "ready"),
+            None,
+        )
+        if ready:
+            body.append(f"  Next action: {ready.get('result')}\n", style="bold green")
+    if pending_attempt is not None:
+        body.append(f"  Current attempt: {pending_attempt}\n")
+
+    body.append("\nSTRIPE\n", style="bold green")
+    body.append("  Payment: PAID\n")
+    if refund is None:
+        body.append("  Refund: none yet.\n", style="dim")
+    else:
+        calls = int(refund.get("calls", 1))
+        body.append("  Refund succeeded.\n")
+        if calls > 1:
+            body.append(f"\n  {calls} CALLS  →  1 REFUND\n", style="bold green")
+            body.append("  Same operation. No duplicate.\n", style="green")
+        else:
+            body.append("  1 call  →  1 refund\n")
+            if not refund_step_completed:
+                body.append(
+                    "  It succeeded before the Worker reported back.\n",
+                    style="yellow",
+                )
+    return Panel(body, title="WHAT SURVIVES", border_style="green")
+
+
+async def _stage_system_panel(
+    client: Client,
+    workflow_id: str,
+    *,
+    loop_steps: list[dict[str, str]] | None = None,
+) -> Panel:
+    """Read authoritative records and render the general-audience view."""
+
+    handle = client.get_workflow_handle(workflow_id)
+    try:
+        description = await handle.describe()
+    except RPCError:
+        return _stage_system_view(
+            status=None,
+            refund=None,
+            pending_attempt=None,
+            refund_step_completed=False,
+        )
+
+    status = description.status.name if description.status else "UNKNOWN"
+    history = await handle.fetch_history()
+    rows, _ = _event_rows(history)
+    refund_step_completed = any(
+        row.get("event") == "completed" and row.get("name") == "issue_refund"
+        for row in rows
+    )
+    pending = list(description.raw_description.pending_activities)
+    pending_attempt = int(pending[0].attempt) if pending else None
+    return _stage_system_view(
+        status=status,
+        refund=find_refund(workflow_id),
+        pending_attempt=pending_attempt,
+        refund_step_completed=refund_step_completed,
+        loop_steps=loop_steps,
+    )
+
+
 def _header(workflow_id: str) -> Panel:
     text = Text()
     text.append("Demo 2: Durable Refund Agent", style="bold")
@@ -229,6 +456,49 @@ def _build(workflow_id: str, agent: Panel, system: Panel) -> Layout:
         Layout(system, name="system"),
     )
     return layout
+
+
+def _compact_columns(left: Panel, right: Panel) -> Table:
+    """Keep two stage panes aligned without stretching them to screen height."""
+
+    def heading_style(panel: Panel) -> Style:
+        border_style = panel.border_style
+        color = (
+            Style.parse(border_style) if isinstance(border_style, str) else border_style
+        )
+        return Style.combine([color or Style(), Style(bold=True)])
+
+    columns = Table(
+        box=box.ROUNDED,
+        border_style="dim",
+        expand=True,
+        padding=(0, 1),
+    )
+    columns.add_column(
+        Text(str(left.title), justify="center"),
+        ratio=1,
+        header_style=heading_style(left),
+    )
+    columns.add_column(
+        Text(str(right.title), justify="center"),
+        ratio=1,
+        header_style=heading_style(right),
+    )
+    columns.add_row(left.renderable, right.renderable)
+    return columns
+
+
+def _stage_build(agent: Panel, system: Panel) -> Group:
+    header = Text()
+    header.append("Demo 2: The agent loop keeps its place\n", style="bold")
+    header.append(
+        "The Worker can disappear. Completed observations and the next action survive.",
+        style="dim",
+    )
+    return Group(
+        Panel(header, border_style="white"),
+        _compact_columns(agent, system),
+    )
 
 
 async def watch(workflow_id: str) -> None:

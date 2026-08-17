@@ -1,20 +1,9 @@
-"""Demo 1: a naive refund agent with no durable execution.
+"""Demo 1: an autonomous loop without durable execution state.
 
-Everything lives in the process: context, retrieved memory, and local progress
-(what it has already done). This demo can rebuild its context and retrieve the
-same facts again. Its progress has no durable owner, so a restart (a deploy,
-eviction, OOM, or crash) between issuing the refund and recording that it
-finished makes the next run refund a second time.
-
-This is the same refund task as Demo 2, deliberately built the naive way so the
-restart issues a duplicate refund. Demo 2 is the same agent made durable, where
-it does not.
-
-Presenter flow:
-  naive-refund reset
-  naive-refund refund --order 1234 --exit-after-effect   # refunds, then exits
-  naive-refund refund --order 1234                         # restart, refunds AGAIN
-  naive-refund ledger                                      # two refunds, one order
+The agent asks questions, observes answers, performs lookups, and chooses its
+next action. Its Worker then disappears before calling the refund system. Its
+process-local working memory disappears too. Stripe correctly retains the paid
+charge with no refund, but it does not own the interrupted agent loop.
 """
 
 from __future__ import annotations
@@ -23,6 +12,7 @@ import argparse
 import json
 import os
 import sys
+import time
 import uuid
 from pathlib import Path
 
@@ -39,6 +29,12 @@ def paint(text: str, name: str) -> str:
 
 def _line(label: str, text: str) -> None:
     print(f"{label:<15}| {text}", flush=True)
+
+
+def _loop_event(payload: dict[str, str]) -> None:
+    """Emit a machine-readable step while keeping the subprocess real."""
+
+    _line("AGENT STEP", json.dumps(payload, sort_keys=True))
 
 
 def _money(cents: int) -> str:
@@ -65,8 +61,9 @@ def _read_ledger() -> dict:
 
 
 def _append_refund(order: str, amount_cents: int) -> str:
-    # A naive refund: append with a fresh id every time, no idempotency key and
-    # no dedup. Running twice therefore commits two refunds.
+    # The effect owner accepts a new refund call. The caller checks existing
+    # effect state before reaching this function, but that check is still manual
+    # reconciliation rather than resumed execution.
     ledger = _read_ledger()
     refund_id = f"re_naive_{uuid.uuid4().hex[:12]}"
     ledger["refunds"].append(
@@ -78,8 +75,68 @@ def _append_refund(order: str, amount_cents: int) -> str:
     return refund_id
 
 
-def _refund_count(order: str) -> int:
-    return sum(1 for r in _read_ledger()["refunds"] if r["order_id"] == order)
+def _existing_refund(order: str) -> dict | None:
+    return next(
+        (refund for refund in _read_ledger()["refunds"] if refund["order_id"] == order),
+        None,
+    )
+
+
+def _run_interactive_agent_loop() -> None:
+    """Choose questions and lookups until the next action is the refund."""
+
+    answers: dict[str, str] = {}
+    questions = (
+        ("item_opened", "Was the package opened?", "Yes"),
+        ("damage", "What was damaged?", "Split seam"),
+    )
+    for question_id, question, suggested_answer in questions:
+        if question_id in answers:
+            continue
+        _loop_event(
+            {
+                "kind": "question",
+                "question_id": question_id,
+                "question": question,
+                "suggested_answer": suggested_answer,
+            }
+        )
+        answer = sys.stdin.readline()
+        if not answer:
+            raise RuntimeError("customer input closed during the agent loop")
+        answers[question_id] = answer.strip() or suggested_answer
+        _loop_event(
+            {
+                "kind": "answer",
+                "question_id": question_id,
+                "question": question,
+                "result": answers[question_id],
+            }
+        )
+
+    _loop_event(
+        {
+            "kind": "tool",
+            "tool": "lookup_order",
+            "label": "Found order",
+            "result": "plush python",
+        }
+    )
+    _loop_event(
+        {
+            "kind": "tool",
+            "tool": "lookup_customer_history",
+            "label": "Checked refund history",
+            "result": "clean",
+        }
+    )
+    _loop_event(
+        {
+            "kind": "ready",
+            "label": "Next action",
+            "result": "issue refund",
+        }
+    )
 
 
 def _refund(args: argparse.Namespace) -> None:
@@ -88,27 +145,65 @@ def _refund(args: argparse.Namespace) -> None:
     _state_dir().mkdir(parents=True, exist_ok=True)
 
     print(paint("=" * 64, "dim"))
-    # This demo can rebuild CONTEXT and retrieve the same MEMORY on a new run.
+    # Domain facts are retrieved into MEMORY on every new run. The source record
+    # remains domain state; this is the copy the agent reasons with.
     _line("CONTEXT", f"order {order}, {_money(amount)}, customer cus_demo_42")
-    _line("MEMORY", "cus_demo_42: 824 days tenure, 1 prior refund")
+    _line("MEMORY COPY", "cus_demo_42: 824 days tenure, 1 prior refund")
 
-    # LOCAL PROGRESS: the naive agent's only record of what it already did is a
-    # local completion marker. A restart before that marker is written erases it.
+    # The completion marker is separate from the effect. It can be durable after
+    # it is written and still cannot close the crash gap before that write.
     if _done_path(order).exists():
-        _line("LOCAL PROGRESS", "completion record found; already refunded, done")
+        _line("PROGRESS RECORD", "completion marker found; already refunded, done")
         return
     _line(
-        "LOCAL PROGRESS",
-        "no completion record; no durable proof this order was refunded",
+        "PROGRESS RECORD",
+        "no marker; cannot infer whether the external effect committed",
     )
+
+    existing = _existing_refund(order)
+    if existing is not None:
+        _line(
+            "EFFECT CHECK",
+            f"refund system confirms {existing['refund_id']} already succeeded",
+        )
+        _line(
+            "RECOVERY",
+            "result reconstructed because this new process checked",
+        )
+        return
+
+    if args.interactive_loop:
+        _run_interactive_agent_loop()
+    else:
+        _line(
+            "RETURN FORM",
+            f"opened={args.opened}; damage={args.damage}; refund_to={args.refund_to}",
+        )
+    if args.hold_before_effect:
+        _line(
+            "REQUEST BUFFER",
+            "next action held by this Worker; Stripe not called",
+        )
+        sys.stdout.flush()
+        while True:
+            time.sleep(60)
 
     _line("MODEL REASONING", "approve (amount within policy, clean history)")
     refund_id = _append_refund(order, amount)
     _line("THE SYSTEM", f"issued refund {refund_id} for order {order}")
 
+    if args.hold_after_effect:
+        _line(
+            "PROGRESS RECORD",
+            "refund succeeded; waiting before recording completion",
+        )
+        sys.stdout.flush()
+        while True:
+            time.sleep(60)
+
     if args.exit_after_effect:
         _line(
-            "LOCAL PROGRESS",
+            "PROGRESS RECORD",
             paint("process exits before recording completion", "danger"),
         )
         sys.stdout.flush()
@@ -118,16 +213,7 @@ def _refund(args: argparse.Namespace) -> None:
         json.dumps({"order_id": order, "refund_id": refund_id}) + "\n",
         encoding="utf-8",
     )
-    _line("LOCAL PROGRESS", "recorded completion")
-    count = _refund_count(order)
-    if count > 1:
-        _line(
-            "WARNING",
-            paint(
-                f"order {order} now has {count} refunds in the ledger, a duplicate",
-                "danger",
-            ),
-        )
+    _line("PROGRESS RECORD", "recorded completion in a separate write")
 
 
 def _ledger(args: argparse.Namespace) -> None:
@@ -142,15 +228,6 @@ def _ledger(args: argparse.Namespace) -> None:
             f"{_money(refund['amount_cents'])}"
         )
         _line("THE SYSTEM", detail)
-    counts: dict[str, int] = {}
-    for refund in refunds:
-        counts[refund["order_id"]] = counts.get(refund["order_id"], 0) + 1
-    for order, count in counts.items():
-        if count > 1:
-            _line(
-                "WARNING",
-                paint(f"order {order}: {count} refunds (duplicate refund)", "danger"),
-            )
 
 
 def _reset(_args: argparse.Namespace) -> None:
@@ -160,120 +237,172 @@ def _reset(_args: argparse.Namespace) -> None:
     print(paint("naive ledger and completion records cleared", "dim"))
 
 
-def _process_interactive(agent: dict, ledger: list) -> None:
-    # This fixture can rebuild context and retrieve the same customer facts on
-    # every run. Whether the order was already refunded lives only in this dict,
-    # so a restart that clears it makes the agent refund again.
+def _process_interactive(
+    agent: dict, ledger: list, user_message: str = "Please refund order 1234"
+) -> None:
+    # This interactive fixture keeps progress in process to make the loss
+    # visible. The scripted path above demonstrates the broader crash gap between
+    # an effect and a separate completion write.
     order, amount, customer = "1234", 8000, "42"
+    agent["user_message"] = user_message
     agent["context"] = {"order": order, "amount": amount, "customer": customer}
     agent["memory"] = {"tenure_days": 824, "prior_refunds": 1}
-    if agent.get("recorded"):
-        agent["note"] = "already refunded (it has that recorded), so it skips"
+    normalized = user_message.lower()
+    if any(word in normalized for word in ("did i", "what happened", "status")):
+        agent["_status_checked"] = True
+        agent["_refund_missing"] = not any(item["order"] == order for item in ledger)
+        agent["note"] = "checked Stripe after a new customer message"
         return
-    refund_id = f"re_naive_{uuid.uuid4().hex[:8]}"
-    ledger.append({"refund_id": refund_id, "order": order, "amount": amount})
-    agent["recorded"] = True
-    agent["note"] = f"issued {refund_id}, recorded 'done' in its own process"
+    agent["_loop_steps"] = [
+        {
+            "kind": "answer",
+            "question_id": "item_opened",
+            "result": "Yes",
+        },
+        {"kind": "answer", "question_id": "damage", "result": "Split seam"},
+        {
+            "kind": "tool",
+            "label": "Looked up order",
+            "result": "PAID",
+        },
+        {
+            "kind": "tool",
+            "label": "Checked refund history",
+            "result": "clean",
+        },
+        {"kind": "ready", "label": "Next action", "result": "issue refund"},
+    ]
+    agent["note"] = "agent chose the refund; loop position remains in this process"
 
 
-def _demo_frame(agent: dict, ledger: list):
-    from rich.layout import Layout
+def _demo_frame(agent: dict, ledger: list, *, stage_mode: bool = False):
+    from rich.console import Group
     from rich.panel import Panel
     from rich.text import Text
 
+    from refund_agent.tui import _compact_columns
+
     left = Text()
     if "context" not in agent:
-        left.append("How can I help you?\n\n", style="bold cyan")
+        left.append("Welcome back, Nyghtowl\n\n", style="bold cyan")
         if agent.get("_restarted"):
             left.append(
-                "the worker restarted (deploy, eviction, OOM).\n"
-                "context can be rebuilt and memory retrieved,\n"
-                "but no durable progress record says the\n"
-                "refund already happened",
+                "REPLACEMENT WORKER\n"
+                "A new session has started.\n"
+                "The answers and loop position are gone.",
                 style="yellow",
             )
         else:
-            left.append(
-                "waiting for a refund request (type one, or Enter)",
-                style="dim",
-            )
-    else:
+            left.append("How can I help?", style="dim")
+    elif agent.get("_status_checked"):
         context = agent.get("context") or {}
-        memory = agent.get("memory") or {}
         amount = (context.get("amount") or 0) / 100
-        left.append("CONTEXT (model input now)\n", style="bold yellow")
-        left.append(
-            f"  Customer {context.get('customer')} requested a refund\n"
-            f"  for order {context.get('order')}, ${amount:.2f}\n\n"
-        )
-        left.append("MEMORY (retrieved for the decision)\n", style="bold blue")
-        left.append(
-            f"  looked up customer {context.get('customer')} in the DB:\n"
-            f"  {memory.get('tenure_days')} days, "
-            f"{memory.get('prior_refunds')} prior refunds\n\n"
-        )
-        left.append("LOCAL PROGRESS (no durable owner)\n", style="bold red")
-        if agent.get("recorded"):
-            left.append(f"  {agent.get('note')}\n")
+        left.append("YOU\n", style="bold yellow")
+        left.append(f"  {agent.get('user_message', 'What happened to my refund?')}\n\n")
+        left.append("AGENT\n", style="bold cyan")
+        left.append("  Let me check Stripe.\n\n")
+        if agent.get("_refund_missing", not ledger):
+            left.append("ANSWER\n", style="bold yellow")
+            left.append("  No refund request reached Stripe.\n", style="bold")
+            left.append("  I lost your return answers.\n", style="yellow")
+            left.append("  Please start the return again.\n", style="yellow")
         else:
-            left.append("  nothing recorded yet\n", style="dim")
+            left.append("ANSWER\n", style="bold green")
+            left.append(f"  Yes — your ${amount:.2f} refund succeeded.\n", style="bold")
+    else:
+        from refund_agent.tui import _append_loop_steps
+
+        context = agent.get("context") or {}
+        amount = (context.get("amount") or 0) / 100
+        left.append("YOU\n", style="bold yellow")
+        left.append(f"  {agent.get('user_message', 'Please refund order 1234')}\n\n")
+        if agent.get("_loop_steps") or agent.get("_pending_question"):
+            _append_loop_steps(
+                left,
+                agent.get("_loop_steps") or [],
+                pending_question=agent.get("_pending_question"),
+            )
+        else:
+            left.append(f"  Order {context.get('order')}: ${amount:.2f}\n")
 
     right = Text()
-    right.append(f"{len(ledger)} refund(s) committed\n\n", style="bold")
-    for entry in ledger:
+    right.append("LAST ORDER\n", style="bold")
+    right.append("  Plush python · $80.00\n\n")
+    right.append("STRIPE\n", style="bold green")
+    right.append("  Payment: PAID\n")
+    right.append(
+        "  Refund: none\n" if not ledger else "  Refund: SUCCEEDED\n",
+        style="dim" if not ledger else "green",
+    )
+    for number, entry in enumerate(ledger, start=1):
         amount = entry["amount"] / 100
-        right.append(f"  {entry['refund_id']}  order {entry['order']}  ${amount:.2f}\n")
-    counts: dict[str, int] = {}
-    for entry in ledger:
-        counts[entry["order"]] = counts.get(entry["order"], 0) + 1
-    if any(count > 1 for count in counts.values()):
-        right.append("\nDUPLICATE REFUND\n", style="bold red")
+        right.append(f"  Refund {number}: order {entry['order']}, ${amount:.2f}\n")
+        right.append("  Status: succeeded\n")
 
     header_text = Text()
-    header_text.append("Demo 1: Naive Refund Agent\n", style="bold")
+    header_text.append("Demo 1: The agent loop starts over\n", style="bold")
     header_text.append(
-        "CONTEXT + MEMORY help decide. Local progress is the only record of done.",
+        "The agent asks, observes, and looks things up before choosing the refund.",
         style="dim",
     )
     header = Panel(header_text, border_style="cyan")
+    if agent.get("_status_checked") and not ledger:
+        explanation = (
+            "Stripe kept the payment record. The Worker held the answers and\n"
+            "the loop position. Both disappeared with it."
+        )
+        explanation_title = "THE CUSTOMER RESTARTS THE LOOP"
+    elif any(step.get("kind") == "ready" for step in agent.get("_loop_steps") or []):
+        explanation = (
+            "The agent chose its next action: issue the refund.\n"
+            "Its answers and next action exist only in this Worker."
+        )
+        explanation_title = "WORK NOT SAVED"
+    elif agent.get("_restarted"):
+        explanation = (
+            "Stripe correctly says PAID with no refund.\n"
+            "The answers and agent loop disappeared with the Worker."
+        )
+        explanation_title = "AFTER REPLACEMENT"
+    else:
+        explanation = "What happens when an autonomous loop loses its Worker?"
+        explanation_title = "THE QUESTION"
     why = Panel(
-        "- context and memory can be rebuilt, but neither proves work completed\n"
-        "- local progress disappears, so recovery guesses and acts again\n"
-        "- the effect has no stable identity it can use to deduplicate",
-        title="why state matters",
+        explanation,
+        title=explanation_title,
         border_style="yellow",
     )
+    if stage_mode and agent.get("_pending_question"):
+        controls = "Answer the agent's next question"
+    elif stage_mode and any(
+        step.get("kind") == "ready" for step in agent.get("_loop_steps") or []
+    ):
+        controls = "Press Enter to replace this Worker"
+    elif stage_mode and agent.get("_status_checked"):
+        controls = "Press Enter to compare with durable execution"
+    elif stage_mode and agent.get("_restarted"):
+        controls = "Ask: What happened to my refund?"
+    elif stage_mode:
+        controls = "Type your refund request at the you> prompt"
+    else:
+        controls = "Type a refund request    restart / deploy / OOM    reset    quit"
     footer = Panel(
-        "Enter or a refund request = process    "
-        "simulate agent restart / deploy / OOM    reset    quit",
+        controls,
         border_style="dim",
     )
-    layout = Layout()
-    layout.split_column(
-        Layout(header, name="head", size=4),
-        Layout(name="body"),
-        Layout(why, name="why", size=5),
-        Layout(footer, name="foot", size=3),
-    )
-    layout["body"].split_row(
-        Layout(
-            Panel(
-                left,
-                title="AGENT VIEW (in process)",
-                border_style="cyan",
-            ),
-            name="agent",
+    panes = _compact_columns(
+        Panel(
+            left,
+            title="THIS AGENT SESSION",
+            border_style="cyan",
         ),
-        Layout(
-            Panel(
-                right,
-                title="EFFECT STATE (durable ledger)",
-                border_style="green",
-            ),
-            name="world",
+        Panel(
+            right,
+            title="ORDER + STRIPE",
+            border_style="green",
         ),
     )
-    return layout
+    return Group(header, panes, why, footer)
 
 
 def _run_interactive() -> None:
@@ -312,7 +441,7 @@ def _run_interactive() -> None:
             agent.clear()
             ledger.clear()
         elif command in ("", "go") or "refund" in command:
-            _process_interactive(agent, ledger)
+            _process_interactive(agent, ledger, command or "Please refund order 1234")
 
 
 def main() -> None:
@@ -325,10 +454,29 @@ def main() -> None:
     refund = commands.add_parser("refund", help="process one refund")
     refund.add_argument("--order", default="1234")
     refund.add_argument("--amount-cents", type=int, default=8000)
+    refund.add_argument("--opened", default="Yes")
+    refund.add_argument("--damage", default="Split seam")
+    refund.add_argument("--refund-to", default="Original card")
     refund.add_argument(
+        "--interactive-loop",
+        action="store_true",
+        help="let the agent choose and ask each return question",
+    )
+    boundary = refund.add_mutually_exclusive_group()
+    boundary.add_argument(
+        "--hold-before-effect",
+        action="store_true",
+        help="wait after choosing the refund but before calling the refund system",
+    )
+    boundary.add_argument(
         "--exit-after-effect",
         action="store_true",
         help="exit right after refunding, before recording completion",
+    )
+    boundary.add_argument(
+        "--hold-after-effect",
+        action="store_true",
+        help="wait after refunding so the process can be replaced at the boundary",
     )
 
     ledger = commands.add_parser("ledger", help="show the naive ledger")

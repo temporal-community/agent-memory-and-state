@@ -24,13 +24,24 @@ def _request(amount_cents: int) -> RefundRequest:
     )
 
 
-def _drive_canned(request: RefundRequest, max_turns: int = 6):
+def _drive_canned(request: RefundRequest, max_turns: int = 10):
     working_memory: list[dict] = []
     tools_used: list[str] = []
     for _ in range(max_turns):
         step = _canned_step(request, working_memory)
         if step.action == "decide":
             return step.recommendation, tools_used
+        if step.action == "ask_customer":
+            working_memory.append(
+                {
+                    "tool": "customer_answer",
+                    "result": {
+                        "question_id": step.question_id,
+                        "answer": step.suggested_answer,
+                    },
+                }
+            )
+            continue
         tools_used.append(step.tool)
         if step.tool == TOOL_ORDER:
             result = lookup_order(request.order_id)
@@ -50,10 +61,37 @@ def test_canned_clean_refund_auto_approves() -> None:
     assert tools == [TOOL_ORDER, TOOL_HISTORY]
 
 
+def test_interactive_agent_asks_each_question_before_using_tools() -> None:
+    request = RefundRequest(**{**asdict(_request(8000)), "interactive_questions": True})
+    working_memory: list[dict] = []
+
+    opened = _canned_step(request, working_memory)
+    assert opened.action == "ask_customer"
+    assert opened.question_id == "item_opened"
+    working_memory.append(
+        {
+            "tool": "customer_answer",
+            "result": {"question_id": "item_opened", "answer": "Yes"},
+        }
+    )
+
+    damage = _canned_step(request, working_memory)
+    assert damage.action == "ask_customer"
+    assert damage.question_id == "damage"
+
+
 def test_canned_large_refund_escalates() -> None:
     recommendation, tools = _drive_canned(_request(15000))
     assert recommendation == "escalate"
     assert TOOL_POLICY in tools
+
+
+def test_stage_refund_policy_is_explicitly_eligible_without_a_return() -> None:
+    policy = check_refund_policy("order-1234")
+
+    assert policy.eligible_for_refund is True
+    assert policy.return_required is False
+    assert "eligible for refund" in policy.note
 
 
 class _FakeCall:
@@ -111,3 +149,100 @@ def test_openai_step_maps_tool_and_decision(monkeypatch) -> None:
     step = activities._openai_step(request, [], "key")
     assert step.action == "decide"
     assert step.recommendation == "approve"
+
+    monkeypatch.setattr(
+        activities,
+        "OpenAI",
+        lambda **_kw: _FakeClient(
+            [
+                _FakeCall(
+                    "ask_customer",
+                    '{"question_id":"damage","question":"What was damaged?",'
+                    '"suggested_answer":"Split seam"}',
+                )
+            ]
+        ),
+    )
+    step = activities._openai_step(request, [], "key")
+    assert step.action == "ask_customer"
+    assert step.question_id == "damage"
+
+
+class _FakeAnthropicBlock:
+    type = "tool_use"
+
+    def __init__(self, name: str, arguments: dict) -> None:
+        self.name = name
+        self.input = arguments
+
+
+class _FakeAnthropicResponse:
+    def __init__(self, content: list) -> None:
+        self.content = content
+
+
+class _FakeMessages:
+    def __init__(self, content: list) -> None:
+        self._content = content
+
+    def create(self, **_kwargs):
+        return _FakeAnthropicResponse(self._content)
+
+
+class _FakeAnthropicClient:
+    def __init__(self, content: list) -> None:
+        self.messages = _FakeMessages(content)
+
+
+def test_anthropic_step_maps_tool_and_decision(monkeypatch) -> None:
+    from refund_agent import activities
+
+    monkeypatch.setenv("ANTHROPIC_MODEL", "test-claude")
+    request = _request(8000)
+
+    monkeypatch.setattr(
+        activities,
+        "Anthropic",
+        lambda **_kw: _FakeAnthropicClient(
+            [_FakeAnthropicBlock("lookup_order", {"order_id": "o1"})]
+        ),
+    )
+    step = activities._anthropic_step(request, [], "key")
+    assert step.action == "use_tool"
+    assert step.tool == "lookup_order"
+
+    monkeypatch.setattr(
+        activities,
+        "Anthropic",
+        lambda **_kw: _FakeAnthropicClient(
+            [
+                _FakeAnthropicBlock(
+                    "submit_decision",
+                    {"recommendation": "approve", "rationale": "clean"},
+                )
+            ]
+        ),
+    )
+    step = activities._anthropic_step(request, [], "key")
+    assert step.action == "decide"
+    assert step.recommendation == "approve"
+
+    monkeypatch.setattr(
+        activities,
+        "Anthropic",
+        lambda **_kw: _FakeAnthropicClient(
+            [
+                _FakeAnthropicBlock(
+                    "ask_customer",
+                    {
+                        "question_id": "damage",
+                        "question": "What was damaged?",
+                        "suggested_answer": "Split seam",
+                    },
+                )
+            ]
+        ),
+    )
+    step = activities._anthropic_step(request, [], "key")
+    assert step.action == "ask_customer"
+    assert step.question_id == "damage"

@@ -25,7 +25,7 @@ with workflow.unsafe.imports_passed_through():
 
 # The loop is bounded so a model that never decides fails loudly instead of
 # looping forever.
-MAX_TURNS = 6
+MAX_TURNS = 10
 
 _MODEL_RETRY = RetryPolicy(
     initial_interval=timedelta(seconds=1),
@@ -49,9 +49,13 @@ class RefundWorkflow:
         self.approval_note = ""
         self.released = False
         self.working_memory: list[dict] = []
+        self.stage_phase_value = "starting"
+        self.pending_question: dict[str, str] | None = None
+        self.customer_answers: dict[str, str] = {}
 
     @workflow.run
     async def run(self, request: RefundRequest) -> RefundResult:
+        self.stage_phase_value = "agent_loop"
         workflow.logger.info("EXECUTION STATE | phase=agent_loop_start")
 
         # OBSERVE, REASON, ACT: the loop runs until the agent decides.
@@ -70,6 +74,39 @@ class RefundWorkflow:
                     source=step.source,
                 )
                 break
+            if step.action == "ask_customer":
+                question_id = step.question_id or ""
+                if question_id not in {"item_opened", "damage"}:
+                    raise ApplicationError(
+                        f"agent asked an unsupported question: {question_id}",
+                        type="UnknownCustomerQuestion",
+                        non_retryable=True,
+                    )
+                self.pending_question = {
+                    "question_id": question_id,
+                    "question": step.question or question_id,
+                    "suggested_answer": step.suggested_answer or "",
+                }
+                self.stage_phase_value = "waiting_for_answer"
+                workflow.logger.info(
+                    f"EXECUTION STATE | phase=waiting_for_answer id={question_id}"
+                )
+                await workflow.wait_condition(
+                    lambda question_id=question_id: question_id in self.customer_answers
+                )
+                answer = self.customer_answers[question_id]
+                self.working_memory.append(
+                    {
+                        "tool": "customer_answer",
+                        "result": {"question_id": question_id, "answer": answer},
+                    }
+                )
+                self.pending_question = None
+                self.stage_phase_value = "agent_loop"
+                workflow.logger.info(
+                    f"EXECUTION STATE | phase=observed answer={question_id}"
+                )
+                continue
             # A tool the agent chose. Results become part of what it knows.
             result = await self._run_tool(step.tool, request)
             self.working_memory.append({"tool": step.tool, "result": result})
@@ -87,6 +124,7 @@ class RefundWorkflow:
         )
 
         if decision.recommendation == "deny":
+            self.stage_phase_value = "denied"
             return RefundResult(
                 refund_id="none",
                 status="denied",
@@ -102,11 +140,24 @@ class RefundWorkflow:
             workflow.logger.info(
                 "EXECUTION STATE | phase=waiting_for_approval | DURABLE WAIT"
             )
+            self.stage_phase_value = "waiting_for_approval"
             # DURABLE WAIT: no Worker process has to remain alive here.
             await workflow.wait_condition(lambda: self.approved)
             workflow.logger.info(
                 f"EXECUTION STATE | phase=approved note={self.approval_note}"
             )
+
+        if request.hold_before_effect:
+            # The loop has observed the customer answers and authoritative
+            # lookups, then chosen the refund as its next action. Temporal keeps
+            # that position while no Worker is available.
+            self.stage_phase_value = "ready_to_refund"
+            workflow.logger.info(
+                "EXECUTION STATE | phase=ready_to_refund | DURABLE WAIT"
+            )
+            await workflow.wait_condition(lambda: self.released)
+            self.stage_phase_value = "issuing_refund"
+            workflow.logger.info("EXECUTION STATE | phase=refund_resumed")
 
         # EXTERNAL EFFECT: retries reuse one Stripe idempotency key.
         heartbeat_timeout = timedelta(seconds=3 if request.fast_recovery else 15)
@@ -180,3 +231,25 @@ class RefundWorkflow:
     def release(self) -> None:
         # EXECUTION STATE: lets a held run finish once the restart has been shown.
         self.released = True
+
+    @workflow.signal
+    def answer_question(self, question_id: str, answer: str) -> None:
+        """Record one customer answer as durable loop input."""
+
+        self.customer_answers[question_id] = answer
+
+    @workflow.query
+    def stage_phase(self) -> str:
+        """Expose the deterministic stage pause without inspecting log timing."""
+
+        return self.stage_phase_value
+
+    @workflow.query
+    def stage_progress(self) -> dict:
+        """Return the loop position used by the general-audience stage view."""
+
+        return {
+            "phase": self.stage_phase_value,
+            "pending_question": self.pending_question,
+            "working_memory": self.working_memory,
+        }

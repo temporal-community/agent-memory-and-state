@@ -14,6 +14,15 @@ class RefundRequest:
     amount_cents: int
     reason: str
     dry_run: bool
+    # A normal CLI request may provide these up front. The guided stage leaves
+    # them empty so the agent chooses each question inside its durable loop.
+    item_opened: str | None = "Yes"
+    damage: str | None = "Split seam"
+    refund_destination: str = "Original card"
+    interactive_questions: bool = False
+    # The stage runner pauses after the agent reaches an approved next action but
+    # before the refund effect begins. This exposes the loop's recovery point.
+    hold_before_effect: bool = False
     # When set, hold the run open after the refund is issued (a durable wait) so
     # a Worker can be killed and restarted to show replay skipping a step that is
     # already recorded, rather than repeating it.
@@ -23,13 +32,17 @@ class RefundRequest:
     # Stripe runs keep the more conservative production-shaped timeout.
     fast_recovery: bool = False
     # The guided talk path is deterministic by default, even when an OpenAI key
-    # is present. Passing --real-model opts back into live model reasoning.
+    # or Anthropic key is present. Passing --real-model opts back into live
+    # model reasoning.
     use_canned_agent: bool = False
+    # Record the selected live provider in Workflow input so replacement Workers
+    # do not switch providers based on whichever keys happen to be present.
+    model_provider: str | None = None
 
 
 @dataclass(frozen=True)
 class OrderDetails:
-    """MEMORY: order facts the agent retrieves with a tool."""
+    """Domain facts that are copied into working memory by a tool."""
 
     order_id: str
     item: str
@@ -40,7 +53,7 @@ class OrderDetails:
 
 @dataclass(frozen=True)
 class CustomerHistory:
-    """MEMORY: retrieved facts, separate from the incoming context."""
+    """Domain facts that are copied into working memory by a tool."""
 
     customer_id: str
     account_tenure_days: int
@@ -50,9 +63,11 @@ class CustomerHistory:
 
 @dataclass(frozen=True)
 class ReturnStatus:
-    """MEMORY: whether the item came back, retrieved with a tool."""
+    """Domain state that is copied into working memory by a tool."""
 
     order_id: str
+    eligible_for_refund: bool
+    return_required: bool
     returned: bool
     received_back: bool
     note: str
@@ -60,11 +75,14 @@ class ReturnStatus:
 
 @dataclass(frozen=True)
 class AgentStep:
-    """One turn of the loop: either use a tool or decide."""
+    """One turn: ask the customer, use a tool, or decide."""
 
-    action: str  # use_tool | decide
+    action: str  # ask_customer | use_tool | decide
     tool: str | None = None
     tool_args: dict[str, str] | None = None
+    question_id: str | None = None
+    question: str | None = None
+    suggested_answer: str | None = None
     recommendation: str | None = None  # approve | escalate | deny
     rationale: str | None = None
     source: str = "canned"

@@ -2,8 +2,9 @@
 
 The agent loop lives in the Workflow. Each turn it calls agent_step (the model),
 which either asks for a tool or reaches a decision. The tools (lookup_order,
-lookup_customer_history, check_refund_policy) are the retrieval the agent does
-live, and issue_refund is the one external effect.
+lookup_customer_history, check_refund_policy) retrieve domain records whose
+results become the agent's working memory, and issue_refund is the one external
+effect.
 """
 
 from __future__ import annotations
@@ -13,8 +14,10 @@ import os
 import time
 from dataclasses import asdict
 
+import anthropic
 import openai
 import stripe
+from anthropic import Anthropic
 from openai import OpenAI
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
@@ -112,7 +115,7 @@ def _agent_summary(view: dict[str, object]) -> str:
 
 @activity.defn
 def lookup_order(order_id: str) -> OrderDetails:
-    """MEMORY: retrieve the order being refunded."""
+    """Retrieve domain state and return a copy for working memory."""
 
     order = OrderDetails(
         order_id=order_id,
@@ -122,7 +125,7 @@ def lookup_order(order_id: str) -> OrderDetails:
         purchased_at="2026-06-03",
     )
     _line(
-        "MEMORY",
+        "MEMORY COPY",
         f"lookup_order: {order.item}, ${order.amount_cents / 100:.2f}, {order.status}",
     )
     return order
@@ -130,7 +133,7 @@ def lookup_order(order_id: str) -> OrderDetails:
 
 @activity.defn
 def lookup_customer_history(customer_id: str) -> CustomerHistory:
-    """MEMORY: retrieve the customer's tenure, purchases, and prior refunds."""
+    """Retrieve domain facts and return a copy for working memory."""
 
     history = CustomerHistory(
         customer_id=customer_id,
@@ -143,7 +146,7 @@ def lookup_customer_history(customer_id: str) -> CustomerHistory:
         prior_refunds=["2025-08-09, laptop stickers, 1800 cents, approved"],
     )
     _line(
-        "MEMORY",
+        "MEMORY COPY",
         f"lookup_customer_history: {history.account_tenure_days} days, "
         f"{len(history.prior_refunds)} prior",
     )
@@ -152,15 +155,20 @@ def lookup_customer_history(customer_id: str) -> CustomerHistory:
 
 @activity.defn
 def check_refund_policy(order_id: str) -> ReturnStatus:
-    """MEMORY: retrieve the return status that governs refund eligibility."""
+    """Retrieve domain state and return a copy for working memory."""
 
     status = ReturnStatus(
         order_id=order_id,
+        eligible_for_refund=True,
+        return_required=False,
         returned=False,
         received_back=False,
-        note="no return on file",
+        note=(
+            "eligible for refund; this low-value damaged item does not need to "
+            "be returned"
+        ),
     )
-    _line("MEMORY", f"check_refund_policy: {status.note}")
+    _line("MEMORY COPY", f"check_refund_policy: {status.note}")
     return status
 
 
@@ -177,10 +185,43 @@ def _observation(working_memory: list[dict], tool: str) -> dict | None:
     return None
 
 
+def _customer_answer(working_memory: list[dict], question_id: str) -> str | None:
+    for observation in working_memory:
+        if observation.get("tool") != "customer_answer":
+            continue
+        result = observation.get("result") or {}
+        if result.get("question_id") == question_id:
+            return str(result.get("answer") or "")
+    return None
+
+
+def _missing_question_step(working_memory: list[dict]) -> AgentStep | None:
+    if _customer_answer(working_memory, "item_opened") is None:
+        return AgentStep(
+            action="ask_customer",
+            question_id="item_opened",
+            question="Was the package opened?",
+            suggested_answer="Yes",
+        )
+    if _customer_answer(working_memory, "damage") is None:
+        return AgentStep(
+            action="ask_customer",
+            question_id="damage",
+            question="What was damaged?",
+            suggested_answer="Split seam",
+        )
+    return None
+
+
 def _canned_step(request: RefundRequest, working_memory: list[dict]) -> AgentStep:
     # A deterministic policy for the offline demo. The path still varies with the
     # request: a clean, low-value refund clears in two lookups; a larger one digs
     # into the refund policy and escalates.
+    if request.interactive_questions:
+        question = _missing_question_step(working_memory)
+        if question is not None:
+            return question
+
     done = {obs.get("tool") for obs in working_memory}
     if TOOL_ORDER not in done:
         return AgentStep(
@@ -222,6 +263,23 @@ def _canned_step(request: RefundRequest, working_memory: list[dict]) -> AgentSte
 _TOOL_SCHEMAS = [
     {
         "type": "function",
+        "name": "ask_customer",
+        "description": "Ask for one missing return detail before deciding.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "question_id": {
+                    "type": "string",
+                    "enum": ["item_opened", "damage"],
+                },
+                "question": {"type": "string"},
+                "suggested_answer": {"type": "string"},
+            },
+            "required": ["question_id", "question", "suggested_answer"],
+        },
+    },
+    {
+        "type": "function",
         "name": TOOL_ORDER,
         "description": "Look up the order being refunded.",
         "parameters": {
@@ -243,7 +301,9 @@ _TOOL_SCHEMAS = [
     {
         "type": "function",
         "name": TOOL_POLICY,
-        "description": "Check whether the refund is within policy (the return status).",
+        "description": (
+            "Check authoritative refund eligibility and whether a return is required."
+        ),
         "parameters": {
             "type": "object",
             "properties": {"order_id": {"type": "string"}},
@@ -270,11 +330,36 @@ _TOOL_SCHEMAS = [
 
 _AGENT_INSTRUCTIONS = (
     "You are a refund agent. Decide whether to approve, escalate, or deny a "
-    "refund. Use the tools to gather what you need, then call submit_decision. "
-    "Approve clear, low-value refunds with a clean customer history. Escalate to "
-    "a human when the amount is large or the history looks risky. Deny only when "
-    "the request is clearly invalid."
+    "refund. When interactive_questions is true, use ask_customer to collect "
+    "item_opened and damage one at a time unless customer_answer observations "
+    "already contain them. Use the other tools to gather what you need, then "
+    "call submit_decision. "
+    "Treat tool results as authoritative. Approve clear, low-value refunds with "
+    "a clean customer history. When the policy tool says eligible, approve; do "
+    "not require a physical return when return_required is false. Escalate to a "
+    "human when the amount is large or the history looks risky. Deny only when "
+    "the request clearly conflicts with the order or policy says it is ineligible."
 )
+
+_MODEL_PROVIDERS = {"anthropic", "openai"}
+
+
+def _selected_model_provider(request: RefundRequest) -> str | None:
+    configured = request.model_provider or os.getenv("AGENT_MODEL_PROVIDER")
+    if configured:
+        provider = configured.strip().lower()
+        if provider not in _MODEL_PROVIDERS:
+            raise ApplicationError(
+                "AGENT_MODEL_PROVIDER must be 'anthropic' or 'openai'",
+                type="ModelProviderInvalid",
+                non_retryable=True,
+            )
+        return provider
+    if os.getenv("OPENAI_API_KEY"):
+        return "openai"
+    if os.getenv("ANTHROPIC_API_KEY"):
+        return "anthropic"
+    return None
 
 
 def _openai_step(
@@ -336,6 +421,91 @@ def _openai_step(
             rationale=str(args.get("rationale", "")),
             source=source,
         )
+    if call.name == "ask_customer":
+        return AgentStep(
+            action="ask_customer",
+            question_id=str(args.get("question_id", "")),
+            question=str(args.get("question", "")),
+            suggested_answer=str(args.get("suggested_answer", "")),
+            source=source,
+        )
+    return AgentStep(
+        action="use_tool",
+        tool=call.name,
+        tool_args={key: str(value) for key, value in args.items()},
+        source=source,
+    )
+
+
+def _anthropic_step(
+    request: RefundRequest, working_memory: list[dict], api_key: str
+) -> AgentStep:
+    model = os.getenv("ANTHROPIC_MODEL")
+    if not model:
+        raise ApplicationError(
+            "ANTHROPIC_MODEL is required for a Claude agent run.",
+            type="AnthropicModelMissing",
+            non_retryable=True,
+        )
+    tools = [
+        {
+            "name": tool["name"],
+            "description": tool["description"],
+            "input_schema": tool["parameters"],
+        }
+        for tool in _TOOL_SCHEMAS
+    ]
+    payload = json.dumps(
+        {"request": asdict(request), "observations": working_memory}, sort_keys=True
+    )
+    # Client retries are disabled so Temporal owns every retry decision.
+    client = Anthropic(api_key=api_key, max_retries=0, timeout=45.0)
+    try:
+        response = client.messages.create(
+            model=model,
+            max_tokens=512,
+            system=_AGENT_INSTRUCTIONS,
+            messages=[{"role": "user", "content": payload}],
+            tools=tools,
+            tool_choice={"type": "any", "disable_parallel_tool_use": True},
+        )
+    except anthropic.APIStatusError as error:
+        status = error.status_code
+        if status == 429 or status >= 500:
+            raise
+        raise ApplicationError(
+            f"Anthropic returned a permanent error (HTTP {status}): {error}",
+            type="AnthropicPermanentError",
+            non_retryable=True,
+        ) from error
+
+    call = next(
+        (block for block in response.content if block.type == "tool_use"),
+        None,
+    )
+    if call is None:
+        raise ApplicationError(
+            "Anthropic returned no tool call for this turn",
+            type="AnthropicOutputError",
+            non_retryable=True,
+        )
+    args = dict(call.input)
+    source = f"anthropic:{model}"
+    if call.name == "submit_decision":
+        return AgentStep(
+            action="decide",
+            recommendation=str(args.get("recommendation", "escalate")),
+            rationale=str(args.get("rationale", "")),
+            source=source,
+        )
+    if call.name == "ask_customer":
+        return AgentStep(
+            action="ask_customer",
+            question_id=str(args.get("question_id", "")),
+            question=str(args.get("question", "")),
+            suggested_answer=str(args.get("suggested_answer", "")),
+            source=source,
+        )
     return AgentStep(
         action="use_tool",
         tool=call.name,
@@ -361,23 +531,47 @@ def agent_step(request: RefundRequest, working_memory: list[dict]) -> AgentStep:
             f"${request.amount_cents / 100:.2f}, customer {request.customer_id}",
         )
 
-    # The model is real whenever a key is present, independent of the Stripe
-    # mode. This lets the loop run with a real model in dry-run (no Stripe key
-    # needed). Only a real Stripe run with no key fails loudly.
-    api_key = os.getenv("OPENAI_API_KEY")
-    if request.use_canned_agent:
-        step = _canned_step(request, working_memory)
-    elif api_key:
-        step = _openai_step(request, working_memory, api_key)
-    elif request.dry_run:
+    required_question = (
+        _missing_question_step(working_memory)
+        if request.interactive_questions
+        else None
+    )
+    if required_question is not None:
+        # Intake requirements remain stable across model providers. Once the
+        # answers exist, the selected model autonomously chooses lookups and the
+        # final action.
+        step = required_question
+    elif request.use_canned_agent:
         step = _canned_step(request, working_memory)
     else:
-        raise ApplicationError(
-            "OPENAI_API_KEY is required for a real run. Set it, or use --dry-run "
-            "for the offline policy.",
-            type="OpenAIKeyMissing",
-            non_retryable=True,
-        )
+        provider = _selected_model_provider(request)
+        if provider == "openai":
+            api_key = os.getenv("OPENAI_API_KEY")
+            if not api_key:
+                raise ApplicationError(
+                    "OPENAI_API_KEY is required for the OpenAI provider.",
+                    type="OpenAIKeyMissing",
+                    non_retryable=True,
+                )
+            step = _openai_step(request, working_memory, api_key)
+        elif provider == "anthropic":
+            api_key = os.getenv("ANTHROPIC_API_KEY")
+            if not api_key:
+                raise ApplicationError(
+                    "ANTHROPIC_API_KEY is required for the Anthropic provider.",
+                    type="AnthropicKeyMissing",
+                    non_retryable=True,
+                )
+            step = _anthropic_step(request, working_memory, api_key)
+        elif request.dry_run:
+            step = _canned_step(request, working_memory)
+        else:
+            raise ApplicationError(
+                "A live model key is required for a real run. Configure "
+                "Anthropic or OpenAI, or use --dry-run for the offline policy.",
+                type="ModelKeyMissing",
+                non_retryable=True,
+            )
 
     view["observations"] = working_memory
     turn = len(working_memory) + 1
@@ -390,6 +584,11 @@ def agent_step(request: RefundRequest, working_memory: list[dict]) -> AgentStep:
         _line(
             "MODEL REASONING",
             f"turn {turn}: decide -> {step.recommendation} ({step.rationale})",
+        )
+    elif step.action == "ask_customer":
+        _line(
+            "MODEL REASONING",
+            f"turn {turn}: next action -> ask {step.question_id}",
         )
     else:
         _line("MODEL REASONING", f"turn {turn}: plan -> call {step.tool}")

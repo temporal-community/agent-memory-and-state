@@ -1,8 +1,8 @@
 """A guided, single-terminal version of the complete meetup demo.
 
 The stage runner owns the disposable processes it needs. It uses a private task
-queue and state directory, so it can start, hard-kill, and replace its Worker
-without touching another Worker the presenter may already have running.
+queue and state directory, so it can stop and replace its Worker without
+touching another Worker the presenter may already have running.
 """
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ import subprocess
 import sys
 import time
 import uuid
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import IO
 
@@ -39,29 +40,33 @@ from refund_agent.workflow import RefundWorkflow
 _SERVER_START_TIMEOUT_SECONDS = 20
 _WORKER_START_TIMEOUT_SECONDS = 15
 _DEMO_TIMEOUT_SECONDS = 90
+_DEFAULT_REFUND_REQUEST = "Please refund order 1234."
 
 
 def _roles() -> Panel:
     body = Text()
     body.append("CONTEXT  ", style="bold yellow")
-    body.append("what the model sees right now; rebuilt from the request\n")
+    body.append("what the agent can see right now\n")
     body.append("MEMORY   ", style="bold blue")
-    body.append("what the agent retrieves or recalls to make a decision\n")
+    body.append("what the agent remembers or looks up\n")
     body.append("STATE    ", style="bold green")
-    body.append("what the application must not guess; an owner records it")
+    body.append("the records used to act and recover safely")
     return Panel(
         body,
-        title="Three roles — the same data can cross these boundaries",
+        title="Three things that help an agent act",
         border_style="white",
     )
 
 
 def _intro() -> Group:
     thesis = Text()
-    thesis.append("An agent can remember the conversation and forget the work.\n\n")
     thesis.append(
-        "We will send the same request, lose a real process at the same failure "
-        "boundary, and change only who owns the record of progress."
+        "An agent can know exactly what to do and still lose the work a "
+        "customer submitted.\n\n"
+    )
+    thesis.append(
+        "We will interrupt the same observe–reason–act loop before Stripe "
+        "receives the refund request, then add a durable owner for its progress."
     )
     return Group(
         Panel(thesis, title="Agent memory and state", border_style="cyan"),
@@ -71,19 +76,21 @@ def _intro() -> Group:
 
 def _closing() -> Group:
     result = Text()
-    result.append("CONTEXT  ", style="bold yellow")
-    result.append("was reconstructed in both demos.\n")
-    result.append("MEMORY   ", style="bold blue")
-    result.append("was retrieved again in both demos.\n")
-    result.append("STATE    ", style="bold green")
-    result.append("decided whether recovery guessed or knew what already happened.\n\n")
-    result.append("Naive: two committed refunds.  ", style="bold red")
-    result.append("Durable: two calls, one Stripe refund.", style="bold green")
+    result.append(
+        "Naive: Stripe had no refund, and the agent loop started over.\n",
+        style="bold red",
+    )
+    result.append(
+        "Durable: the reloaded agent resumed at its next action.\n\n",
+        style="bold green",
+    )
+    result.append("No repeated questions.  ", style="bold green")
+    result.append("One submitted request, one refund.", style="green")
     return Group(
         Panel(result, title="The difference", border_style="green"),
         Panel(
-            "Optimize knowledge for relevance. Preserve authoritative state "
-            "for correctness.",
+            "Stripe knows what reached Stripe. Temporal remembers the accepted "
+            "application work that still needs to finish.",
             border_style="white",
         ),
     )
@@ -184,11 +191,9 @@ class _Services:
         environment = os.environ.copy()
         environment["DEMO_STATE_DIR"] = str(self.stage_state)
         environment["TEMPORAL_TASK_QUEUE"] = self.task_queue
-        # Five minutes lets the presenter explain the uncertain boundary before
-        # pressing Enter. The stage Workflow gives this Activity a matching
-        # six-minute start-to-close budget, then detects the killed Worker in
-        # roughly three seconds via its heartbeat timeout.
-        environment["EFFECT_RESTART_WINDOW_SECONDS"] = "300"
+        # The guided story now replaces the Worker before Stripe is called. The
+        # separate manual demo still covers the uncertain post-effect boundary.
+        environment["EFFECT_RESTART_WINDOW_SECONDS"] = "0"
         self.worker = subprocess.Popen(
             [sys.executable, "-m", "refund_agent.worker"],
             env=environment,
@@ -234,13 +239,17 @@ class _Services:
 
 
 async def _wait_for_first_effect(
-    handle: WorkflowHandle, workflow_id: str, *, timeout: float
-) -> None:
+    handle: WorkflowHandle,
+    workflow_id: str,
+    *,
+    timeout: float,
+    on_update: Callable[[], Awaitable[None]] | None = None,
+) -> str:
     deadline = time.monotonic() + timeout
     approval_sent = False
     while time.monotonic() < deadline:
-        if find_refund(workflow_id) is not None:
-            return
+        refund_exists = find_refund(workflow_id) is not None
+        denied = False
         path = agent_view_path(workflow_id)
         if path.exists():
             try:
@@ -255,9 +264,50 @@ async def _wait_for_first_effect(
                 )
                 approval_sent = True
             elif recommendation == "deny":
-                raise RuntimeError("the live model denied the stage refund")
+                denied = True
+        if on_update is not None:
+            await on_update()
+        if refund_exists:
+            return "effect"
+        if denied:
+            return "denied"
         await asyncio.sleep(0.2)
     raise RuntimeError("timed out waiting for the first refund call")
+
+
+def _live_model_provider(explicit: str | None) -> str:
+    configured = explicit or os.getenv("AGENT_MODEL_PROVIDER")
+    if configured:
+        provider = configured.strip().lower()
+        if provider not in {"anthropic", "openai"}:
+            raise RuntimeError("model provider must be 'anthropic' or 'openai'")
+    else:
+        available = [
+            provider
+            for provider, key in (
+                ("anthropic", os.getenv("ANTHROPIC_API_KEY")),
+                ("openai", os.getenv("OPENAI_API_KEY")),
+            )
+            if key
+        ]
+        if len(available) > 1:
+            raise RuntimeError(
+                "both live-model keys are configured; choose --model-provider"
+            )
+        if not available:
+            raise RuntimeError(
+                "--real-model requires ANTHROPIC_API_KEY or OPENAI_API_KEY"
+            )
+        provider = available[0]
+
+    required = {
+        "anthropic": ("ANTHROPIC_API_KEY", "ANTHROPIC_MODEL"),
+        "openai": ("OPENAI_API_KEY", "OPENAI_MODEL"),
+    }[provider]
+    missing = [name for name in required if not os.getenv(name)]
+    if missing:
+        raise RuntimeError(f"{provider} live model requires {', '.join(missing)}")
+    return provider
 
 
 def _naive_ledger(stage_state: Path) -> list[dict[str, object]]:
@@ -275,37 +325,61 @@ def _naive_ledger(stage_state: Path) -> list[dict[str, object]]:
     ]
 
 
-async def _run_naive(
-    stage_state: Path, *, crash_after_effect: bool, amount_cents: int
-) -> None:
-    command = [
-        sys.executable,
-        "-m",
-        "refund_agent.naive_refund",
-        "refund",
-        "--order",
-        "1234",
-        "--amount-cents",
-        str(amount_cents),
-    ]
-    if crash_after_effect:
-        command.append("--exit-after-effect")
+def _start_naive_at_boundary(
+    stage_state: Path,
+    *,
+    amount_cents: int,
+) -> subprocess.Popen[str]:
     environment = os.environ.copy()
     environment["DEMO_STATE_DIR"] = str(stage_state)
-    result = await asyncio.to_thread(
-        subprocess.run,
-        command,
+    return subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "refund_agent.naive_refund",
+            "refund",
+            "--order",
+            "1234",
+            "--amount-cents",
+            str(amount_cents),
+            "--interactive-loop",
+            "--hold-before-effect",
+        ],
         env=environment,
-        capture_output=True,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
         text=True,
-        check=False,
     )
-    expected = 1 if crash_after_effect else 0
-    if result.returncode != expected:
-        raise RuntimeError(
-            "naive demo process did not exit as expected:\n"
-            + (result.stderr or result.stdout)
-        )
+
+
+def _stop_naive_worker(process: subprocess.Popen[str] | None) -> None:
+    _stop_process(process, hard=True)
+    if process is not None and process.stdin is not None:
+        process.stdin.close()
+    if process is not None and process.stdout is not None:
+        process.stdout.close()
+
+
+async def _read_naive_loop_event(
+    process: subprocess.Popen[str], *, timeout: float = 10
+) -> dict[str, str]:
+    if process.stdout is None:
+        raise RuntimeError("naive Worker output is unavailable")
+
+    async def read_event() -> dict[str, str]:
+        while True:
+            line = await asyncio.to_thread(process.stdout.readline)
+            if not line:
+                raise RuntimeError("naive Worker exited during the agent loop")
+            label, separator, payload = line.partition("|")
+            if separator and label.strip() == "AGENT STEP":
+                return json.loads(payload)
+
+    try:
+        return await asyncio.wait_for(read_event(), timeout=timeout)
+    except TimeoutError as error:
+        raise RuntimeError("timed out waiting for the naive agent loop") from error
 
 
 def _seed_test_payment(amount_cents: int) -> str:
@@ -322,20 +396,208 @@ def _seed_test_payment(amount_cents: int) -> str:
     return str(intent.id)
 
 
-def _show(console: Console, renderable, cue: str) -> None:
+def _show(console: Console, renderable, cue: str) -> str:
     console.clear()
     console.print(renderable)
-    input(f"\n{cue}  ")
+    return input(f"\n{cue}  ")
 
 
-async def _durable_frame(client: Client, workflow_id: str):
-    # Reuse the same renderer as `refund-demo watch`, but keep this stage path
-    # step-driven so the presenter controls every beat with Enter.
+def _ask_for_refund(
+    console: Console,
+    renderable,
+    cue: str,
+    *,
+    default: str = _DEFAULT_REFUND_REQUEST,
+) -> str:
+    console.clear()
+    console.print(renderable)
+    request = input(f"\n{cue}\nyou> ").strip()
+    return request or default
+
+
+async def _drive_naive_loop(
+    console: Console,
+    process: subprocess.Popen[str],
+    *,
+    request_text: str,
+    amount_cents: int,
+) -> tuple[list[dict[str, str]], dict[str, str]]:
+    """Let the real naive subprocess choose and ask each visible question."""
+
+    from refund_agent.naive_refund import _demo_frame
+
+    if process.stdin is None:
+        raise RuntimeError("naive Worker input is unavailable")
+    steps: list[dict[str, str]] = []
+    answers: dict[str, str] = {}
+    base = {
+        "context": {
+            "order": "1234",
+            "amount": amount_cents,
+            "customer": "Nyghtowl",
+        },
+        "user_message": request_text,
+    }
+    while True:
+        event = await _read_naive_loop_event(process)
+        kind = event.get("kind")
+        if kind == "question":
+            console.clear()
+            console.print(
+                _demo_frame(
+                    {**base, "_loop_steps": steps, "_pending_question": event},
+                    [],
+                    stage_mode=True,
+                )
+            )
+            default = event.get("suggested_answer") or ""
+            answer = input(f"\nagent> {event.get('question')} [{default}]  ").strip()
+            answer = answer or default
+            process.stdin.write(answer + "\n")
+            process.stdin.flush()
+        elif kind in {"answer", "tool"}:
+            steps.append(event)
+            if kind == "answer":
+                answers[event["question_id"]] = event["result"]
+        elif kind == "ready":
+            steps.append(event)
+            return steps, answers
+
+
+def _loop_steps_from_progress(progress: dict) -> list[dict[str, str]]:
+    steps: list[dict[str, str]] = []
+    for observation in progress.get("working_memory") or []:
+        tool = observation.get("tool")
+        result = observation.get("result") or {}
+        if tool == "customer_answer":
+            question_id = str(result.get("question_id") or "")
+            steps.append(
+                {
+                    "kind": "answer",
+                    "question_id": question_id,
+                    "result": str(result.get("answer") or ""),
+                }
+            )
+        elif tool == "lookup_order":
+            steps.append(
+                {
+                    "kind": "tool",
+                    "tool": tool,
+                    "label": "Found order",
+                    "result": str(result.get("item") or "plush python"),
+                }
+            )
+        elif tool == "lookup_customer_history":
+            steps.append(
+                {
+                    "kind": "tool",
+                    "tool": tool,
+                    "label": "Checked refund history",
+                    "result": "clean",
+                }
+            )
+        elif tool == "check_refund_policy":
+            steps.append(
+                {
+                    "kind": "tool",
+                    "tool": tool,
+                    "label": "Checked refund policy",
+                    "result": "eligible"
+                    if result.get("eligible_for_refund")
+                    else "not eligible",
+                }
+            )
+    if progress.get("phase") == "ready_to_refund":
+        steps.append(
+            {"kind": "ready", "label": "Next action", "result": "issue refund"}
+        )
+    return steps
+
+
+async def _drive_temporal_loop(
+    handle: WorkflowHandle,
+    answers: dict[str, str],
+    *,
+    timeout: float = _DEMO_TIMEOUT_SECONDS,
+) -> tuple[str, list[dict[str, str]]]:
+    """Fast-forward the same questions and wait for the durable next action."""
+
+    deadline = time.monotonic() + timeout
+    approval_sent = False
+    sent_questions: set[str] = set()
+    last_progress: dict = {}
+    while time.monotonic() < deadline:
+        try:
+            last_progress = await handle.query(RefundWorkflow.stage_progress)
+        except Exception:
+            await asyncio.sleep(0.1)
+            continue
+        phase = last_progress.get("phase")
+        pending = last_progress.get("pending_question") or {}
+        if pending:
+            question_id = str(pending.get("question_id") or "")
+            if question_id not in sent_questions:
+                answer = answers.get(
+                    question_id,
+                    str(pending.get("suggested_answer") or ""),
+                )
+                await handle.signal(
+                    RefundWorkflow.answer_question,
+                    args=[question_id, answer],
+                )
+                sent_questions.add(question_id)
+        elif phase == "waiting_for_approval" and not approval_sent:
+            await handle.signal(
+                RefundWorkflow.approve,
+                "approved by the guided stage runner",
+            )
+            approval_sent = True
+        elif phase == "ready_to_refund":
+            return "ready", _loop_steps_from_progress(last_progress)
+        elif phase == "denied":
+            return "denied", _loop_steps_from_progress(last_progress)
+        await asyncio.sleep(0.1)
+    raise RuntimeError("timed out waiting for the durable agent loop")
+
+
+async def _durable_frame(
+    client: Client,
+    workflow_id: str,
+    *,
+    recovered: bool = False,
+    loop_steps: list[dict[str, str]] | None = None,
+    pending_question: dict[str, str] | None = None,
+):
+    # The talk path uses plain language. `refund-demo watch` keeps the detailed
+    # execution vocabulary for technical exploration.
     from refund_agent import tui
 
-    agent = tui._agent_panel(workflow_id)
-    system = await tui._system_panel(client, workflow_id)
-    return tui._build(workflow_id, agent, system)
+    agent = tui._stage_agent_panel(
+        workflow_id,
+        recovered=recovered,
+        loop_steps=loop_steps,
+        pending_question=pending_question,
+    )
+    system = await tui._stage_system_panel(
+        client,
+        workflow_id,
+        loop_steps=loop_steps,
+    )
+    return tui._stage_build(agent, system)
+
+
+async def _denied_frame(client: Client, workflow_id: str):
+    from refund_agent import tui
+
+    agent = tui._stage_agent_panel(workflow_id)
+    system = tui._stage_system_view(
+        status="COMPLETED",
+        refund=None,
+        pending_attempt=None,
+        refund_step_completed=False,
+        denied=True,
+    )
+    return tui._stage_build(agent, system)
 
 
 async def run(
@@ -344,14 +606,16 @@ async def run(
     real: bool,
     real_model: bool,
     amount_cents: int,
+    model_provider: str | None = None,
 ) -> None:
     """Run both demos from one guided terminal."""
 
     from refund_agent.naive_refund import _demo_frame
 
     console = Console()
-    if real_model and not os.getenv("OPENAI_API_KEY"):
-        raise RuntimeError("--real-model requires OPENAI_API_KEY")
+    if model_provider and not real_model:
+        raise RuntimeError("--model-provider requires --real-model")
+    selected_provider = _live_model_provider(model_provider) if real_model else None
     run_token = uuid.uuid4().hex[:8]
     workflow_id = workflow_id or f"talk-refund-{run_token}"
     base_state = state_dir().resolve()
@@ -367,63 +631,15 @@ async def run(
     os.environ["DEMO_STATE_DIR"] = str(stage_state)
     client: Client | None = None
     handle: WorkflowHandle | None = None
+    naive_worker: subprocess.Popen[str] | None = None
     completed = False
 
     try:
         _show(console, _intro(), "Press Enter to begin with the naive agent")
 
-        _show(
-            console,
-            _demo_frame({}, []),
-            "Press Enter to send: refund order 1234",
-        )
-        with console.status(
-            "The naive process is issuing the refund, then crashing..."
-        ):
-            await _run_naive(
-                stage_state,
-                crash_after_effect=True,
-                amount_cents=amount_cents,
-            )
-        _show(
-            console,
-            _demo_frame({"_restarted": True}, _naive_ledger(stage_state)),
-            "Press Enter to restart the agent and send the same request",
-        )
-        with console.status("A new process is rebuilding context and memory..."):
-            await _run_naive(
-                stage_state,
-                crash_after_effect=False,
-                amount_cents=amount_cents,
-            )
-        recovered_naive = {
-            "context": {
-                "order": "1234",
-                "amount": amount_cents,
-                "customer": "42",
-            },
-            "memory": {"tenure_days": 824, "prior_refunds": 1},
-            "recorded": True,
-            "note": "new process retrieved the same knowledge and acted again",
-        }
-        _show(
-            console,
-            _demo_frame(recovered_naive, _naive_ledger(stage_state)),
-            "Press Enter to run the same failure with durable execution",
-        )
-
-        with console.status("Preparing Temporal and a private demo Worker..."):
-            client = await services.connect_or_start_server()
-            await services.start_worker()
-        _show(
-            console,
-            await _durable_frame(client, workflow_id),
-            "Press Enter to send the same refund request",
-        )
-
         payment_intent = "pi_dry_run_demo"
         if real:
-            with console.status("Creating a Stripe test payment to refund..."):
+            with console.status("Creating Nyghtowl's paid Stripe test order..."):
                 try:
                     payment_intent = await asyncio.to_thread(
                         _seed_test_payment, amount_cents
@@ -432,16 +648,98 @@ async def run(
                     raise RuntimeError(
                         f"Stripe could not create the test payment: {error}"
                     ) from error
+
+        naive_request = _ask_for_refund(
+            console,
+            _demo_frame({}, [], stage_mode=True),
+            "Ask the agent for a refund",
+        )
+        naive_worker = _start_naive_at_boundary(
+            stage_state,
+            amount_cents=amount_cents,
+        )
+        naive_steps, customer_answers = await _drive_naive_loop(
+            console,
+            naive_worker,
+            request_text=naive_request,
+            amount_cents=amount_cents,
+        )
+        first_attempt = {
+            "context": {
+                "order": "1234",
+                "amount": amount_cents,
+                "customer": "Nyghtowl",
+            },
+            "memory": {"tenure_days": 824, "prior_refunds": 1},
+            "user_message": naive_request,
+            "_loop_steps": naive_steps,
+        }
+        _show(
+            console,
+            _demo_frame(
+                first_attempt,
+                [],
+                stage_mode=True,
+            ),
+            "Press Enter to replace this Worker and reload the agent",
+        )
+        _stop_naive_worker(naive_worker)
+        naive_worker = None
+        status_question = _ask_for_refund(
+            console,
+            _demo_frame(
+                {"_restarted": True},
+                [],
+                stage_mode=True,
+            ),
+            "The replacement Worker has no active loop. Ask what happened",
+            default="What happened to my refund?",
+        )
+        recovered_naive = {
+            "context": {
+                "order": "1234",
+                "amount": amount_cents,
+                "customer": "Nyghtowl",
+            },
+            "_status_checked": True,
+            "_refund_missing": True,
+            "note": "new process checked Stripe after the customer asked",
+            "user_message": status_question,
+        }
+        _show(
+            console,
+            _demo_frame(
+                recovered_naive,
+                [],
+                stage_mode=True,
+            ),
+            "Press Enter to run the same failure with durable execution",
+        )
+
+        with console.status("Preparing Temporal and a private demo Worker..."):
+            client = await services.connect_or_start_server()
+            await services.start_worker()
+        durable_request = _ask_for_refund(
+            console,
+            await _durable_frame(client, workflow_id),
+            "Ask for a refund for order 1234 (the plush python)",
+        )
         request = RefundRequest(
             request_id=workflow_id,
             order_id="order-1234",
             customer_id="cus_demo_42",
             payment_intent_id=payment_intent,
             amount_cents=amount_cents,
-            reason="The plush python arrived with a split seam",
+            reason=durable_request,
             dry_run=not real,
+            item_opened=None,
+            damage=None,
+            refund_destination="Original card",
+            interactive_questions=True,
+            hold_before_effect=True,
             fast_recovery=True,
             use_canned_agent=not real_model,
+            model_provider=selected_provider,
         )
         handle = await client.start_workflow(
             RefundWorkflow.run,
@@ -449,41 +747,88 @@ async def run(
             id=workflow_id,
             task_queue=queue,
         )
-        with console.status("The agent is retrieving memory and issuing the refund..."):
-            await _wait_for_first_effect(
+        with console.status(
+            "Fast-forwarding the same questions through the durable agent loop..."
+        ):
+            outcome, durable_steps = await _drive_temporal_loop(
                 handle,
-                workflow_id,
-                timeout=_DEMO_TIMEOUT_SECONDS,
+                customer_answers,
             )
+        if outcome == "denied":
+            await handle.result()
+            completed = True
+            _show(
+                console,
+                await _denied_frame(client, workflow_id),
+                "The model denied this request. Press Enter to exit",
+            )
+            if real:
+                console.print(
+                    "A Stripe test payment was created but not refunded. "
+                    "Reconcile it with: uv run refund-demo cleanup",
+                    style="bold yellow",
+                )
+            return
         _show(
             console,
-            await _durable_frame(client, workflow_id),
-            "Press Enter to hard-kill the Worker before it reports completion",
+            await _durable_frame(
+                client,
+                workflow_id,
+                loop_steps=durable_steps,
+            ),
+            "Press Enter to replace this Worker after it chooses the refund",
         )
 
         services.kill_worker()
         await asyncio.sleep(0.25)
         _show(
             console,
-            await _durable_frame(client, workflow_id),
-            "Press Enter to start a fresh Worker",
+            await _durable_frame(
+                client,
+                workflow_id,
+                loop_steps=durable_steps,
+            ),
+            "Press Enter to reload the agent with a replacement Worker",
         )
 
         with console.status(
-            "Replaying recorded state and retrying with the same effect identity..."
+            "Resuming at the saved next action; no repeated questions..."
         ):
             await services.start_worker()
-            await asyncio.wait_for(handle.result(), timeout=_DEMO_TIMEOUT_SECONDS)
+            await handle.signal(RefundWorkflow.release)
+            result = await asyncio.wait_for(
+                handle.result(), timeout=_DEMO_TIMEOUT_SECONDS
+            )
+        if result.status == "denied":
+            completed = True
+            _show(
+                console,
+                await _denied_frame(client, workflow_id),
+                "The model denied this request. Press Enter to exit",
+            )
+            if real:
+                console.print(
+                    "A Stripe test payment was created but not refunded. "
+                    "Reconcile it with: uv run refund-demo cleanup",
+                    style="bold yellow",
+                )
+            return
         completed = True
         _show(
             console,
-            await _durable_frame(client, workflow_id),
+            await _durable_frame(
+                client,
+                workflow_id,
+                recovered=True,
+                loop_steps=durable_steps,
+            ),
             "Press Enter for the takeaway",
         )
         console.clear()
         console.print(_closing())
         console.print(f"\nStage logs: {stage_state}", style="dim")
     finally:
+        _stop_naive_worker(naive_worker)
         if handle is not None and not completed:
             try:
                 await handle.terminate(reason="single-window stage runner closed")
