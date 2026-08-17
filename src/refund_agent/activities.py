@@ -159,9 +159,14 @@ def check_refund_policy(order_id: str) -> ReturnStatus:
 
     status = ReturnStatus(
         order_id=order_id,
+        eligible_for_refund=True,
+        return_required=False,
         returned=False,
         received_back=False,
-        note="no return on file",
+        note=(
+            "eligible for refund; this low-value damaged item does not need to "
+            "be returned"
+        ),
     )
     _line("MEMORY COPY", f"check_refund_policy: {status.note}")
     return status
@@ -246,7 +251,9 @@ _TOOL_SCHEMAS = [
     {
         "type": "function",
         "name": TOOL_POLICY,
-        "description": "Check whether the refund is within policy (the return status).",
+        "description": (
+            "Check authoritative refund eligibility and whether a return is required."
+        ),
         "parameters": {
             "type": "object",
             "properties": {"order_id": {"type": "string"}},
@@ -274,9 +281,11 @@ _TOOL_SCHEMAS = [
 _AGENT_INSTRUCTIONS = (
     "You are a refund agent. Decide whether to approve, escalate, or deny a "
     "refund. Use the tools to gather what you need, then call submit_decision. "
-    "Approve clear, low-value refunds with a clean customer history. Escalate to "
-    "a human when the amount is large or the history looks risky. Deny only when "
-    "the request is clearly invalid."
+    "Treat tool results as authoritative. Approve clear, low-value refunds with "
+    "a clean customer history. When the policy tool says eligible, approve; do "
+    "not require a physical return when return_required is false. Escalate to a "
+    "human when the amount is large or the history looks risky. Deny only when "
+    "the request clearly conflicts with the order or policy says it is ineligible."
 )
 
 _MODEL_PROVIDERS = {"anthropic", "openai"}

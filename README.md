@@ -191,10 +191,11 @@ Stripe `sk_test_` or `rk_test_` key. Live Stripe keys are rejected. Put local
 values in `.env`; exported shell variables take precedence.
 
 Test a live model against the offline ledger before combining it with `--real`.
-The demo uses a fixed plush-python order, so the spoken request should refer to
-order 1234 or the plush python. If a live model denies, the stage now shows its
-rationale and the fact that no refund was issued instead of exiting on an empty
-screen.
+The demo uses a fixed, refund-eligible plush-python order, so the spoken request
+should refer to order 1234 or the plush python. Its policy record explicitly says
+that this low-value damaged item does not require a physical return. If a live
+model denies a conflicting request, the stage shows its rationale and the fact
+that no refund was issued instead of exiting on an empty screen.
 
 ## Read the payoff
 

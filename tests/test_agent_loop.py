@@ -56,6 +56,14 @@ def test_canned_large_refund_escalates() -> None:
     assert TOOL_POLICY in tools
 
 
+def test_stage_refund_policy_is_explicitly_eligible_without_a_return() -> None:
+    policy = check_refund_policy("order-1234")
+
+    assert policy.eligible_for_refund is True
+    assert policy.return_required is False
+    assert "eligible for refund" in policy.note
+
+
 class _FakeCall:
     def __init__(self, name: str, arguments: str) -> None:
         self.type = "function_call"

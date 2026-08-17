@@ -57,6 +57,8 @@ class ReturnStatus:
     """Domain state that is copied into working memory by a tool."""
 
     order_id: str
+    eligible_for_refund: bool
+    return_required: bool
     returned: bool
     received_back: bool
     note: str

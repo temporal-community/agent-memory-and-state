@@ -64,10 +64,11 @@ Test live model behavior without Stripe first:
 uv run refund-demo stage --real-model --model-provider anthropic
 ```
 
-The stage fixture always represents order 1234, an $80 plush python. A request
-for a different item can correctly be denied by a live model. On denial, the
-stage shows the model's rationale and confirms that no refund was issued. If
-`--real` created a Stripe test payment before that denial, run
+The stage fixture always represents order 1234, an $80 plush python that is
+explicitly eligible for a refund without a physical return. A request for a
+different item can correctly be denied by a live model. On denial, the stage
+shows the model's rationale and confirms that no refund was issued. If `--real`
+created a Stripe test payment before that denial, run
 `uv run refund-demo cleanup` to reconcile the test charge.
 
 ## Start Temporal and the Worker

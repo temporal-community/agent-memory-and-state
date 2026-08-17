@@ -157,10 +157,10 @@ in-flight frame, point out:
 - Refund system: the refund succeeded; one call produced one refund.
 - Temporal has not received the completion yet.
 
-The live request must refer to order 1234 or the plush python. The stage's
-domain fixtures are intentionally fixed; asking to refund a different item may
-correctly produce a denial. Rehearse the live model against the offline ledger
-before adding `--real`.
+The live request must refer to order 1234 or the plush python. The stage's fixed
+policy record says this low-value damaged item is eligible without a physical
+return. Asking to refund a different item may correctly produce a denial.
+Rehearse the live model against the offline ledger before adding `--real`.
 
 **Say**
 
