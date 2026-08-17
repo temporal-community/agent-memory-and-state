@@ -252,8 +252,8 @@ def _demo_frame(agent: dict, ledger: list, *, stage_mode: bool = False):
     header = Panel(header_text, border_style="cyan")
     if duplicate:
         explanation = (
-            "The same request produced the same decision twice.\n"
-            "Nothing tied both attempts to one refund."
+            "The replacement Worker could not resume the first request.\n"
+            "It treated the customer's second message as new work."
         )
         explanation_title = "WHAT WENT WRONG"
     elif agent.get("_effect_unrecorded") and ledger:

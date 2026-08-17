@@ -124,3 +124,25 @@ def test_naive_first_refund_holds_on_the_agent_reply() -> None:
     assert "The completed customer request is not" in text
     assert "Press Enter to replace this Worker" in text
     assert "crash" not in text.lower()
+
+
+def test_naive_duplicate_explains_lost_execution_progress() -> None:
+    frame = _demo_frame(
+        {
+            "user_message": "Please refund my plush python",
+            "context": {"order": "1234", "amount": 8000, "customer": "42"},
+            "memory": {"tenure_days": 824, "prior_refunds": 1},
+        },
+        [
+            {"refund_id": "r1", "order": "1234", "amount": 8000},
+            {"refund_id": "r2", "order": "1234", "amount": 8000},
+        ],
+        stage_mode=True,
+    )
+    output = io.StringIO()
+    Console(file=output, width=128).print(frame)
+    text = output.getvalue()
+
+    assert "could not resume the first request" in text
+    assert "treated the customer's second message as new work" in text
+    assert "tied both attempts to one refund" not in text
