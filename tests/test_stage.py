@@ -6,14 +6,17 @@ import pytest
 pytest.importorskip("rich")
 
 from refund_agent.cli import _parser
+from refund_agent.settings import agent_view_path
 from refund_agent.stage import (
     _ask_for_refund,
     _closing,
+    _live_model_provider,
     _naive_ledger,
     _roles,
     _Services,
     _start_naive_at_boundary,
     _stop_naive_worker,
+    _wait_for_first_effect,
     _wait_for_naive_effect,
     run,
 )
@@ -47,16 +50,24 @@ class _FakeConsole:
         pass
 
 
+class _FakeWorkflowHandle:
+    async def signal(self, *_args) -> None:
+        pass
+
+
 def test_stage_command_defaults_to_offline_deterministic_mode() -> None:
     args = _parser().parse_args(["stage"])
 
     assert args.command == "stage"
     assert args.real is False
     assert args.real_model is False
+    assert args.model_provider is None
 
 
 def test_real_model_mode_requires_an_api_key(monkeypatch) -> None:
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("AGENT_MODEL_PROVIDER", raising=False)
 
     with pytest.raises(RuntimeError, match="OPENAI_API_KEY"):
         asyncio.run(
@@ -67,6 +78,41 @@ def test_real_model_mode_requires_an_api_key(monkeypatch) -> None:
                 amount_cents=8000,
             )
         )
+
+
+def test_stage_accepts_an_explicit_anthropic_provider(monkeypatch) -> None:
+    args = _parser().parse_args(
+        ["stage", "--real-model", "--model-provider", "anthropic"]
+    )
+
+    assert args.real_model is True
+    assert args.model_provider == "anthropic"
+
+
+def test_anthropic_provider_requires_its_key_and_model(monkeypatch) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("ANTHROPIC_MODEL", "test-model")
+
+    assert _live_model_provider("anthropic") == "anthropic"
+
+
+def test_live_model_denial_is_a_renderable_outcome(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
+    path = agent_view_path("denied-workflow")
+    path.write_text(
+        json.dumps({"decision": {"recommendation": "deny"}}),
+        encoding="utf-8",
+    )
+
+    outcome = asyncio.run(
+        _wait_for_first_effect(
+            _FakeWorkflowHandle(),
+            "denied-workflow",
+            timeout=0.2,
+        )
+    )
+
+    assert outcome == "denied"
 
 
 def test_stage_role_copy_separates_context_memory_and_state() -> None:

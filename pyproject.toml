@@ -9,6 +9,7 @@ description = "A small Temporal refund agent demo for durable execution talks"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+  "anthropic>=0.120,<1",
   "openai>=2.0,<3",
   "stripe>=14,<15",
   "temporalio>=1.30,<2",

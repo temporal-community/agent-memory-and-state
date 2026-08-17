@@ -15,11 +15,13 @@ import subprocess
 import sys
 import time
 import uuid
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import IO
 
 import stripe
 from rich.console import Console, Group
+from rich.live import Live
 from rich.panel import Panel
 from rich.text import Text
 from temporalio.client import Client, WorkflowHandle
@@ -236,13 +238,17 @@ class _Services:
 
 
 async def _wait_for_first_effect(
-    handle: WorkflowHandle, workflow_id: str, *, timeout: float
-) -> None:
+    handle: WorkflowHandle,
+    workflow_id: str,
+    *,
+    timeout: float,
+    on_update: Callable[[], Awaitable[None]] | None = None,
+) -> str:
     deadline = time.monotonic() + timeout
     approval_sent = False
     while time.monotonic() < deadline:
-        if find_refund(workflow_id) is not None:
-            return
+        refund_exists = find_refund(workflow_id) is not None
+        denied = False
         path = agent_view_path(workflow_id)
         if path.exists():
             try:
@@ -257,9 +263,50 @@ async def _wait_for_first_effect(
                 )
                 approval_sent = True
             elif recommendation == "deny":
-                raise RuntimeError("the live model denied the stage refund")
+                denied = True
+        if on_update is not None:
+            await on_update()
+        if refund_exists:
+            return "effect"
+        if denied:
+            return "denied"
         await asyncio.sleep(0.2)
     raise RuntimeError("timed out waiting for the first refund call")
+
+
+def _live_model_provider(explicit: str | None) -> str:
+    configured = explicit or os.getenv("AGENT_MODEL_PROVIDER")
+    if configured:
+        provider = configured.strip().lower()
+        if provider not in {"anthropic", "openai"}:
+            raise RuntimeError("model provider must be 'anthropic' or 'openai'")
+    else:
+        available = [
+            provider
+            for provider, key in (
+                ("anthropic", os.getenv("ANTHROPIC_API_KEY")),
+                ("openai", os.getenv("OPENAI_API_KEY")),
+            )
+            if key
+        ]
+        if len(available) > 1:
+            raise RuntimeError(
+                "both live-model keys are configured; choose --model-provider"
+            )
+        if not available:
+            raise RuntimeError(
+                "--real-model requires ANTHROPIC_API_KEY or OPENAI_API_KEY"
+            )
+        provider = available[0]
+
+    required = {
+        "anthropic": ("ANTHROPIC_API_KEY", "ANTHROPIC_MODEL"),
+        "openai": ("OPENAI_API_KEY", "OPENAI_MODEL"),
+    }[provider]
+    missing = [name for name in required if not os.getenv(name)]
+    if missing:
+        raise RuntimeError(f"{provider} live model requires {', '.join(missing)}")
+    return provider
 
 
 def _naive_ledger(stage_state: Path) -> list[dict[str, object]]:
@@ -388,20 +435,36 @@ async def _durable_frame(client: Client, workflow_id: str, *, recovered: bool = 
     return tui._stage_build(agent, system)
 
 
+async def _denied_frame(client: Client, workflow_id: str):
+    from refund_agent import tui
+
+    agent = tui._stage_agent_panel(workflow_id)
+    system = tui._stage_system_view(
+        status="COMPLETED",
+        refund=None,
+        pending_attempt=None,
+        refund_step_completed=False,
+        denied=True,
+    )
+    return tui._stage_build(agent, system)
+
+
 async def run(
     *,
     workflow_id: str | None,
     real: bool,
     real_model: bool,
     amount_cents: int,
+    model_provider: str | None = None,
 ) -> None:
     """Run both demos from one guided terminal."""
 
     from refund_agent.naive_refund import _demo_frame
 
     console = Console()
-    if real_model and not os.getenv("OPENAI_API_KEY"):
-        raise RuntimeError("--real-model requires OPENAI_API_KEY")
+    if model_provider and not real_model:
+        raise RuntimeError("--model-provider requires --real-model")
+    selected_provider = _live_model_provider(model_provider) if real_model else None
     run_token = uuid.uuid4().hex[:8]
     workflow_id = workflow_id or f"talk-refund-{run_token}"
     base_state = state_dir().resolve()
@@ -496,7 +559,7 @@ async def run(
         durable_request = _ask_for_refund(
             console,
             await _durable_frame(client, workflow_id),
-            "Ask the Temporal-backed agent for the refund",
+            "Ask for a refund for order 1234 (the plush python)",
         )
 
         payment_intent = "pi_dry_run_demo"
@@ -520,6 +583,7 @@ async def run(
             dry_run=not real,
             fast_recovery=True,
             use_canned_agent=not real_model,
+            model_provider=selected_provider,
         )
         handle = await client.start_workflow(
             RefundWorkflow.run,
@@ -527,12 +591,37 @@ async def run(
             id=workflow_id,
             task_queue=queue,
         )
-        with console.status("The agent is retrieving memory and issuing the refund..."):
-            await _wait_for_first_effect(
+        console.clear()
+        with Live(
+            await _durable_frame(client, workflow_id),
+            console=console,
+            refresh_per_second=4,
+        ) as live:
+
+            async def update_live_frame() -> None:
+                live.update(await _durable_frame(client, workflow_id))
+
+            outcome = await _wait_for_first_effect(
                 handle,
                 workflow_id,
                 timeout=_DEMO_TIMEOUT_SECONDS,
+                on_update=update_live_frame,
             )
+        if outcome == "denied":
+            await handle.result()
+            completed = True
+            _show(
+                console,
+                await _denied_frame(client, workflow_id),
+                "The model denied this request. Press Enter to exit",
+            )
+            if real:
+                console.print(
+                    "A Stripe test payment was created but not refunded. "
+                    "Reconcile it with: uv run refund-demo cleanup",
+                    style="bold yellow",
+                )
+            return
         _show(
             console,
             await _durable_frame(client, workflow_id),

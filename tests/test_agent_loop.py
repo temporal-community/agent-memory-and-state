@@ -111,3 +111,63 @@ def test_openai_step_maps_tool_and_decision(monkeypatch) -> None:
     step = activities._openai_step(request, [], "key")
     assert step.action == "decide"
     assert step.recommendation == "approve"
+
+
+class _FakeAnthropicBlock:
+    type = "tool_use"
+
+    def __init__(self, name: str, arguments: dict) -> None:
+        self.name = name
+        self.input = arguments
+
+
+class _FakeAnthropicResponse:
+    def __init__(self, content: list) -> None:
+        self.content = content
+
+
+class _FakeMessages:
+    def __init__(self, content: list) -> None:
+        self._content = content
+
+    def create(self, **_kwargs):
+        return _FakeAnthropicResponse(self._content)
+
+
+class _FakeAnthropicClient:
+    def __init__(self, content: list) -> None:
+        self.messages = _FakeMessages(content)
+
+
+def test_anthropic_step_maps_tool_and_decision(monkeypatch) -> None:
+    from refund_agent import activities
+
+    monkeypatch.setenv("ANTHROPIC_MODEL", "test-claude")
+    request = _request(8000)
+
+    monkeypatch.setattr(
+        activities,
+        "Anthropic",
+        lambda **_kw: _FakeAnthropicClient(
+            [_FakeAnthropicBlock("lookup_order", {"order_id": "o1"})]
+        ),
+    )
+    step = activities._anthropic_step(request, [], "key")
+    assert step.action == "use_tool"
+    assert step.tool == "lookup_order"
+
+    monkeypatch.setattr(
+        activities,
+        "Anthropic",
+        lambda **_kw: _FakeAnthropicClient(
+            [
+                _FakeAnthropicBlock(
+                    "submit_decision",
+                    {"recommendation": "approve", "rationale": "clean"},
+                )
+            ]
+        ),
+    )
+    step = activities._anthropic_step(request, [], "key")
+    assert step.action == "decide"
+    assert step.recommendation == "approve"

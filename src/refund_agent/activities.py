@@ -14,8 +14,10 @@ import os
 import time
 from dataclasses import asdict
 
+import anthropic
 import openai
 import stripe
+from anthropic import Anthropic
 from openai import OpenAI
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
@@ -277,6 +279,26 @@ _AGENT_INSTRUCTIONS = (
     "the request is clearly invalid."
 )
 
+_MODEL_PROVIDERS = {"anthropic", "openai"}
+
+
+def _selected_model_provider(request: RefundRequest) -> str | None:
+    configured = request.model_provider or os.getenv("AGENT_MODEL_PROVIDER")
+    if configured:
+        provider = configured.strip().lower()
+        if provider not in _MODEL_PROVIDERS:
+            raise ApplicationError(
+                "AGENT_MODEL_PROVIDER must be 'anthropic' or 'openai'",
+                type="ModelProviderInvalid",
+                non_retryable=True,
+            )
+        return provider
+    if os.getenv("OPENAI_API_KEY"):
+        return "openai"
+    if os.getenv("ANTHROPIC_API_KEY"):
+        return "anthropic"
+    return None
+
 
 def _openai_step(
     request: RefundRequest, working_memory: list[dict], api_key: str
@@ -345,6 +367,75 @@ def _openai_step(
     )
 
 
+def _anthropic_step(
+    request: RefundRequest, working_memory: list[dict], api_key: str
+) -> AgentStep:
+    model = os.getenv("ANTHROPIC_MODEL")
+    if not model:
+        raise ApplicationError(
+            "ANTHROPIC_MODEL is required for a Claude agent run.",
+            type="AnthropicModelMissing",
+            non_retryable=True,
+        )
+    tools = [
+        {
+            "name": tool["name"],
+            "description": tool["description"],
+            "input_schema": tool["parameters"],
+        }
+        for tool in _TOOL_SCHEMAS
+    ]
+    payload = json.dumps(
+        {"request": asdict(request), "observations": working_memory}, sort_keys=True
+    )
+    # Client retries are disabled so Temporal owns every retry decision.
+    client = Anthropic(api_key=api_key, max_retries=0, timeout=45.0)
+    try:
+        response = client.messages.create(
+            model=model,
+            max_tokens=512,
+            system=_AGENT_INSTRUCTIONS,
+            messages=[{"role": "user", "content": payload}],
+            tools=tools,
+            tool_choice={"type": "any", "disable_parallel_tool_use": True},
+        )
+    except anthropic.APIStatusError as error:
+        status = error.status_code
+        if status == 429 or status >= 500:
+            raise
+        raise ApplicationError(
+            f"Anthropic returned a permanent error (HTTP {status}): {error}",
+            type="AnthropicPermanentError",
+            non_retryable=True,
+        ) from error
+
+    call = next(
+        (block for block in response.content if block.type == "tool_use"),
+        None,
+    )
+    if call is None:
+        raise ApplicationError(
+            "Anthropic returned no tool call for this turn",
+            type="AnthropicOutputError",
+            non_retryable=True,
+        )
+    args = dict(call.input)
+    source = f"anthropic:{model}"
+    if call.name == "submit_decision":
+        return AgentStep(
+            action="decide",
+            recommendation=str(args.get("recommendation", "escalate")),
+            rationale=str(args.get("rationale", "")),
+            source=source,
+        )
+    return AgentStep(
+        action="use_tool",
+        tool=call.name,
+        tool_args={key: str(value) for key, value in args.items()},
+        source=source,
+    )
+
+
 @activity.defn
 def agent_step(request: RefundRequest, working_memory: list[dict]) -> AgentStep:
     """MODEL REASONING: one turn of the agent loop."""
@@ -362,23 +453,37 @@ def agent_step(request: RefundRequest, working_memory: list[dict]) -> AgentStep:
             f"${request.amount_cents / 100:.2f}, customer {request.customer_id}",
         )
 
-    # The model is real whenever a key is present, independent of the Stripe
-    # mode. This lets the loop run with a real model in dry-run (no Stripe key
-    # needed). Only a real Stripe run with no key fails loudly.
-    api_key = os.getenv("OPENAI_API_KEY")
     if request.use_canned_agent:
         step = _canned_step(request, working_memory)
-    elif api_key:
-        step = _openai_step(request, working_memory, api_key)
-    elif request.dry_run:
-        step = _canned_step(request, working_memory)
     else:
-        raise ApplicationError(
-            "OPENAI_API_KEY is required for a real run. Set it, or use --dry-run "
-            "for the offline policy.",
-            type="OpenAIKeyMissing",
-            non_retryable=True,
-        )
+        provider = _selected_model_provider(request)
+        if provider == "openai":
+            api_key = os.getenv("OPENAI_API_KEY")
+            if not api_key:
+                raise ApplicationError(
+                    "OPENAI_API_KEY is required for the OpenAI provider.",
+                    type="OpenAIKeyMissing",
+                    non_retryable=True,
+                )
+            step = _openai_step(request, working_memory, api_key)
+        elif provider == "anthropic":
+            api_key = os.getenv("ANTHROPIC_API_KEY")
+            if not api_key:
+                raise ApplicationError(
+                    "ANTHROPIC_API_KEY is required for the Anthropic provider.",
+                    type="AnthropicKeyMissing",
+                    non_retryable=True,
+                )
+            step = _anthropic_step(request, working_memory, api_key)
+        elif request.dry_run:
+            step = _canned_step(request, working_memory)
+        else:
+            raise ApplicationError(
+                "A live model key is required for a real run. Configure "
+                "Anthropic or OpenAI, or use --dry-run for the offline policy.",
+                type="ModelKeyMissing",
+                non_retryable=True,
+            )
 
     view["observations"] = working_memory
     turn = len(working_memory) + 1

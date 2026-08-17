@@ -23,8 +23,12 @@ class RefundRequest:
     # Stripe runs keep the more conservative production-shaped timeout.
     fast_recovery: bool = False
     # The guided talk path is deterministic by default, even when an OpenAI key
-    # is present. Passing --real-model opts back into live model reasoning.
+    # or Anthropic key is present. Passing --real-model opts back into live
+    # model reasoning.
     use_canned_agent: bool = False
+    # Record the selected live provider in Workflow input so replacement Workers
+    # do not switch providers based on whichever keys happen to be present.
+    model_provider: str | None = None
 
 
 @dataclass(frozen=True)

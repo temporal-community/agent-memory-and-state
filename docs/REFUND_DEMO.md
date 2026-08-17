@@ -34,14 +34,21 @@ precedence, and configuration is never loaded into deterministic Workflow code.
 
 The model and refund effect are independent:
 
-- With `OPENAI_API_KEY` and `OPENAI_MODEL`, the agent uses the configured model.
-- Without an OpenAI key, `--dry-run` uses the deterministic policy.
+- With `ANTHROPIC_API_KEY` and `ANTHROPIC_MODEL`, the agent can use Claude.
+- With `OPENAI_API_KEY` and `OPENAI_MODEL`, the agent can use OpenAI.
+- `AGENT_MODEL_PROVIDER` selects `anthropic` or `openai`; the CLI
+  `--model-provider` option records that choice in Workflow input.
+- Without a configured live-model provider, `--dry-run` uses the deterministic
+  policy.
 - `--dry-run` writes to an offline Stripe-like ledger under `.demo-state`.
 - `--real` calls Stripe test mode and requires a `sk_test_` or `rk_test_` key.
 - Live Stripe keys are rejected.
 
 | Variable | Purpose |
 | --- | --- |
+| `AGENT_MODEL_PROVIDER` | Selects `anthropic` or `openai` when using a live model |
+| `ANTHROPIC_API_KEY` | Enables Claude model reasoning |
+| `ANTHROPIC_MODEL` | Claude model id used when Anthropic is selected |
 | `OPENAI_API_KEY` | Enables live model reasoning |
 | `OPENAI_MODEL` | Model id used when a key is present |
 | `STRIPE_API_KEY` | Stripe test key required by `--real` |
@@ -50,6 +57,18 @@ The model and refund effect are independent:
 | `TEMPORAL_NAMESPACE` | Temporal namespace |
 | `TEMPORAL_TASK_QUEUE` | Worker task queue |
 | `DEMO_STATE_DIR` | Offline ledger, views, logs, and local state |
+
+Test live model behavior without Stripe first:
+
+```bash
+uv run refund-demo stage --real-model --model-provider anthropic
+```
+
+The stage fixture always represents order 1234, an $80 plush python. A request
+for a different item can correctly be denied by a live model. On denial, the
+stage shows the model's rationale and confirms that no refund was issued. If
+`--real` created a Stripe test payment before that denial, run
+`uv run refund-demo cleanup` to reconcile the test charge.
 
 ## Start Temporal and the Worker
 

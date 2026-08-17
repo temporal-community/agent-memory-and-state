@@ -183,6 +183,12 @@ def _stage_agent_panel(workflow_id: str, *, recovered: bool = False) -> Panel:
     recommendation = str(decision.get("recommendation") or "")
     body.append("DECISION\n", style="bold cyan")
     body.append(f"  {recommendations.get(recommendation, 'Still deciding')}\n")
+    if recommendation == "deny" and decision.get("rationale"):
+        rationale = " ".join(str(decision["rationale"]).split())
+        if len(rationale) > 180:
+            rationale = rationale[:177].rstrip() + "..."
+        body.append("\nWHY\n", style="bold yellow")
+        body.append(f"  {rationale}\n", style="yellow")
     return Panel(body, title="THIS WORKER", border_style="cyan")
 
 
@@ -280,6 +286,7 @@ def _stage_system_view(
     refund: dict | None,
     pending_attempt: int | None,
     refund_step_completed: bool,
+    denied: bool = False,
 ) -> Panel:
     """Render the durable side without SDK or systems-design vocabulary."""
 
@@ -287,6 +294,14 @@ def _stage_system_view(
     if status is None:
         body.append("No request yet.\n\n", style="bold green")
         body.append("Waiting for you to ask for a refund.", style="dim")
+        return Panel(body, title="WHAT SURVIVES", border_style="green")
+
+    if denied:
+        body.append("TEMPORAL\n", style="bold green")
+        body.append("  This request is complete.\n")
+        body.append("  No refund step was started.\n\n")
+        body.append("REFUND SYSTEM\n", style="bold green")
+        body.append("  No refund was issued.\n", style="dim")
         return Panel(body, title="WHAT SURVIVES", border_style="green")
 
     body.append("TEMPORAL\n", style="bold green")

@@ -180,12 +180,21 @@ shuts down only the processes it started.
 | --- | --- | --- |
 | `uv run refund-demo stage` | Deterministic | Offline ledger |
 | `uv run refund-demo stage --real` | Deterministic | Stripe test mode |
-| `uv run refund-demo stage --real-model` | OpenAI | Offline ledger |
-| `uv run refund-demo stage --real --real-model` | OpenAI | Stripe test mode |
+| `uv run refund-demo stage --real-model --model-provider anthropic` | Claude | Offline ledger |
+| `uv run refund-demo stage --real --real-model --model-provider anthropic` | Claude | Stripe test mode |
+| `uv run refund-demo stage --real-model --model-provider openai` | OpenAI | Offline ledger |
 
-Real model mode requires `OPENAI_API_KEY` and `OPENAI_MODEL`. Real refund mode
-requires a Stripe `sk_test_` or `rk_test_` key. Live Stripe keys are rejected.
-Put local values in `.env`; exported shell variables take precedence.
+Claude mode requires `ANTHROPIC_API_KEY` and `ANTHROPIC_MODEL`; OpenAI mode
+requires `OPENAI_API_KEY` and `OPENAI_MODEL`. Set `AGENT_MODEL_PROVIDER`, or use
+`--model-provider`, when both keys are configured. Real refund mode requires a
+Stripe `sk_test_` or `rk_test_` key. Live Stripe keys are rejected. Put local
+values in `.env`; exported shell variables take precedence.
+
+Test a live model against the offline ledger before combining it with `--real`.
+The demo uses a fixed plush-python order, so the spoken request should refer to
+order 1234 or the plush python. If a live model denies, the stage now shows its
+rationale and the fact that no refund was issued instead of exiting on an empty
+screen.
 
 ## Read the payoff
 

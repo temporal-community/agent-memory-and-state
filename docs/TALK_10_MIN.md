@@ -28,10 +28,10 @@ deterministic agent:
 uv run refund-demo stage --real
 ```
 
-For a fully live dress rehearsal or talk, use both OpenAI and Stripe test mode:
+For a fully live dress rehearsal or talk, use Claude and Stripe test mode:
 
 ```bash
-uv run refund-demo stage --real --real-model
+uv run refund-demo stage --real --real-model --model-provider anthropic
 ```
 
 The model's output is not the claim being demonstrated. `--real` is therefore
@@ -41,8 +41,8 @@ that the reasoning turn was live.
 ## Before going on stage
 
 - Run `uv sync --extra tui` and one complete offline rehearsal.
-- Confirm `OPENAI_API_KEY`, `OPENAI_MODEL`, and a Stripe **test-mode** key are
-  available if using the fully live command.
+- Confirm `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL`, and a Stripe **test-mode** key
+  are available if using the fully live command.
 - Have a local Temporal dev server running before the talk to remove startup
   latency from the transition between demos. The stage runner will connect to
   it instead of starting another one.
@@ -156,6 +156,11 @@ in-flight frame, point out:
 - Temporal: the refund step is still open; the Worker has not reported back.
 - Refund system: the refund succeeded; one call produced one refund.
 - Temporal has not received the completion yet.
+
+The live request must refer to order 1234 or the plush python. The stage's
+domain fixtures are intentionally fixed; asking to refund a different item may
+correctly produce a denial. Rehearse the live model against the offline ledger
+before adding `--real`.
 
 **Say**
 

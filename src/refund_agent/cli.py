@@ -74,6 +74,7 @@ async def _start(args: argparse.Namespace) -> None:
         reason=args.reason,
         dry_run=dry_run,
         hold_after_effect=args.hold,
+        model_provider=args.model_provider,
     )
     await client.start_workflow(
         RefundWorkflow.run,
@@ -423,6 +424,7 @@ async def _stage(args: argparse.Namespace) -> None:
             real=args.real,
             real_model=args.real_model,
             amount_cents=8000,
+            model_provider=args.model_provider,
         )
     except RuntimeError as error:
         print(f"STAGE | {error}")
@@ -495,6 +497,11 @@ def _parser() -> argparse.ArgumentParser:
         help="after the refund, hold the run open so a restart shows replay "
         "skipping the recorded step (finish with: refund-demo release ID)",
     )
+    start.add_argument(
+        "--model-provider",
+        choices=("anthropic", "openai"),
+        help="record which configured live-model provider this Workflow uses",
+    )
 
     approve = commands.add_parser("approve", help="send the approval Signal")
     approve.add_argument("workflow_id")
@@ -536,7 +543,12 @@ def _parser() -> argparse.ArgumentParser:
     stage.add_argument(
         "--real-model",
         action="store_true",
-        help="use OPENAI_API_KEY instead of the deterministic stage policy",
+        help="use a configured Anthropic or OpenAI model instead of canned policy",
+    )
+    stage.add_argument(
+        "--model-provider",
+        choices=("anthropic", "openai"),
+        help="live provider; inferred only when exactly one provider key is set",
     )
 
     seed = commands.add_parser(

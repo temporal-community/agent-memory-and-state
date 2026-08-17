@@ -49,6 +49,9 @@ model.
   directory. It must not stop or delete unrelated Workers or user data.
 - Offline deterministic mode is the default stage path. `--real` is Stripe test
   mode only, and live Stripe keys must remain rejected.
+- Live model mode supports Anthropic and OpenAI. Record an explicit provider in
+  Workflow input so replacement Workers cannot switch providers based on key
+  availability.
 - Never print, commit, or expose values from `.env` or API-key environment
   variables.
 - Do not run a real-model or Stripe test-mode rehearsal unless the task calls

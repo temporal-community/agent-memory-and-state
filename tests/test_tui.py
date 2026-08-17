@@ -69,6 +69,20 @@ def test_stage_system_view_makes_the_payoff_glanceable() -> None:
     assert "No duplicate" in panel.renderable.plain
 
 
+def test_stage_system_view_explains_a_denied_live_request() -> None:
+    panel = tui._stage_system_view(
+        status="COMPLETED",
+        refund=None,
+        pending_attempt=None,
+        refund_step_completed=False,
+        denied=True,
+    )
+
+    assert "This request is complete" in panel.renderable.plain
+    assert "No refund step was started" in panel.renderable.plain
+    assert "No refund was issued" in panel.renderable.plain
+
+
 def test_naive_restart_returns_to_a_blank_conversation() -> None:
     frame = _demo_frame(
         {"_restarted": True},
