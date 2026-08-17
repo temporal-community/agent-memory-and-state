@@ -66,8 +66,31 @@ def test_naive_restart_returns_to_a_blank_conversation() -> None:
     text = output.getvalue()
 
     assert "How can I help you?" in text
-    assert "NEW SESSION" in text
+    assert "REPLACEMENT WORKER" in text
+    assert "A new session has started" in text
     assert "previous conversation is gone" in text
-    assert "AFTER THE CRASH" in text
+    assert "AFTER REPLACEMENT" in text
     assert "WHAT WENT WRONG" not in text
     assert "Type your refund request at the you> prompt" in text
+
+
+def test_naive_first_refund_holds_on_the_agent_reply() -> None:
+    frame = _demo_frame(
+        {
+            "user_message": "Please refund my plush python",
+            "context": {"order": "1234", "amount": 8000, "customer": "42"},
+            "memory": {"tenure_days": 824, "prior_refunds": 1},
+            "_effect_unrecorded": True,
+        },
+        [{"refund_id": "r1", "order": "1234", "amount": 8000}],
+        stage_mode=True,
+    )
+    output = io.StringIO()
+    Console(file=output, width=128).print(frame)
+    text = output.getvalue()
+
+    assert "Please refund my plush python" in text
+    assert "Refund issued." in text
+    assert "REFUND ISSUED" in text
+    assert "Press Enter to replace this Worker" in text
+    assert "crash" not in text.lower()

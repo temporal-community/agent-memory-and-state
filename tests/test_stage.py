@@ -12,6 +12,9 @@ from refund_agent.stage import (
     _naive_ledger,
     _roles,
     _Services,
+    _start_naive_at_boundary,
+    _stop_naive_worker,
+    _wait_for_naive_effect,
     run,
 )
 
@@ -119,6 +122,22 @@ def test_stage_reads_scripted_naive_ledger(tmp_path) -> None:
     assert _naive_ledger(tmp_path) == [
         {"refund_id": "re_naive_1", "order": "1234", "amount": 8000}
     ]
+
+
+def test_naive_worker_waits_for_replacement_at_the_uncertain_boundary(
+    tmp_path,
+) -> None:
+    process = _start_naive_at_boundary(tmp_path, amount_cents=8000)
+    try:
+        asyncio.run(_wait_for_naive_effect(process, tmp_path))
+
+        assert process.poll() is None
+        assert len(_naive_ledger(tmp_path)) == 1
+        assert not (tmp_path / "naive-done-1234.json").exists()
+    finally:
+        _stop_naive_worker(process)
+
+    assert process.poll() is not None
 
 
 def test_stage_cleanup_removes_only_its_worker_pid(tmp_path) -> None:

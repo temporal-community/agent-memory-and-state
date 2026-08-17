@@ -115,11 +115,13 @@ def _render_naive_frames(output_dir: Path) -> None:
         "user_message": "Please refund order 1234",
         "context": {"order": "1234", "amount": 8000, "customer": "42"},
         "memory": {"tenure_days": 824, "prior_refunds": 1},
-        "recorded": True,
-        "note": "issued re_naive_4f31a3c1, then wrote a separate done marker",
+        "_effect_unrecorded": True,
+        "note": "issued re_naive_4f31a3c1 before saving progress",
     }
     duplicate_agent = {
         **active_agent,
+        "_effect_unrecorded": False,
+        "recorded": True,
         "note": "issued re_naive_95b8d412, then wrote a separate done marker",
     }
     frames = [
@@ -136,7 +138,7 @@ def _render_naive_frames(output_dir: Path) -> None:
         (
             "03-naive-restarted.html",
             _demo_frame({"_restarted": True}, [first_refund], stage_mode=True),
-            "Naive demo — Worker restarted",
+            "Naive demo — replacement Worker",
         ),
         (
             "04-naive-duplicate.html",

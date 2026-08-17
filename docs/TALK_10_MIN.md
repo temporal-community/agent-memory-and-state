@@ -103,18 +103,18 @@ Point to the agent view on the left and the effect owner on the right.
 **Action**
 
 At the `you>` prompt, ask the agent for the refund in your own words. The refund
-commits and the process exits before its separate completion marker is written.
+commits. Pause on the agent's “Refund issued” reply, then press Enter to replace
+the Worker before its separate completion marker is written.
 
 **Say over the one-refund frame**
 
-“The refund exists on the right. The new process has no coordinated record that
-can distinguish ‘never called’ from ‘committed before the crash.’ A durable
-done flag written afterward would have the same gap.”
+“The refund exists on the right. Now this Worker is replaced before it saves
+its progress. A durable done flag written afterward would have the same gap.”
 
 **Action**
 
-The screen reloads as a new session with no chat history. Ask for the same
-refund again. Pause on `DUPLICATE REFUND`.
+The screen reloads with `REPLACEMENT WORKER` and no chat history. Ask for the
+same refund again. Pause on `DUPLICATE REFUND`.
 
 **Say**
 
@@ -162,7 +162,8 @@ reported completion.”
 
 **Action**
 
-Press Enter to hard-kill the Worker. Hold the `LOST` frame for three seconds.
+Press Enter to replace the Worker. Hold the `WORKER GONE` frame for three
+seconds.
 
 **Say while pointing right**
 
@@ -246,11 +247,12 @@ recover it.”
 | Control | Screen or action | Target time |
 | --- | --- | --- |
 | Enter | Empty naive agent | 0:45 |
-| Type refund request | First refund commits; process exits | 1:45 |
+| Type refund request | Your message and `Refund issued` remain visible | 1:45 |
+| Enter | Replacement Worker opens with no chat history | 2:05 |
 | Type request again | New session repeats decision; duplicate appears | 2:45 |
 | Enter | Empty durable agent | 3:45 |
 | Type refund request | Effect accepted; completion uncertain | 4:30 |
-| Enter | Worker hard-killed; `WORKER GONE` | 5:15 |
+| Enter | Current Worker replaced; `WORKER GONE` | 5:15 |
 | Enter | Replacement Worker; two calls, one refund | 6:15 |
 | Enter | Final takeaway | 9:30 |
 
@@ -259,7 +261,7 @@ recover it.”
 - **Behind at 3:15:** Ask the audience question without waiting for answers.
 - **Behind at 6:30:** Say the two-owner explanation over the recovered frame.
 - **Behind at 8:30:** Skip the code excerpt entirely.
-- **Never cut:** the `LOST` pause, “two calls, one refund,” or the final three
+- **Never cut:** the `WORKER GONE` pause, “two calls, one refund,” or the final three
   lines.
 
 ## Practice sequence
@@ -276,7 +278,7 @@ recover it.”
 
 ## Rehearsal scorecard
 
-| Attempt | Mode | Total | Duplicate by 3:15 | `LOST` pause | Owners named | No “exactly once” claim | Close from memory | Notes |
+| Attempt | Mode | Total | Duplicate by 3:15 | `WORKER GONE` pause | Owners named | No “exactly once” claim | Close from memory | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 |  |  |  |  |  |  |  |  |
 | 2 |  |  |  |  |  |  |  |  |
@@ -291,7 +293,7 @@ the same idempotent operation asks the effect owner to reconcile one identity.
 
 **Why not put the done flag in a database?**
 
-The crash can happen after Stripe commits and before the database write. A
+The Worker can disappear after Stripe commits and before the database write. A
 durable flag does not make two systems one transaction.
 
 **Is Temporal the agent's memory?**

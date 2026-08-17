@@ -23,6 +23,7 @@ import argparse
 import json
 import os
 import sys
+import time
 import uuid
 from pathlib import Path
 
@@ -107,6 +108,15 @@ def _refund(args: argparse.Namespace) -> None:
     refund_id = _append_refund(order, amount)
     _line("THE SYSTEM", f"issued refund {refund_id} for order {order}")
 
+    if args.hold_after_effect:
+        _line(
+            "PROGRESS RECORD",
+            "refund succeeded; waiting before recording completion",
+        )
+        sys.stdout.flush()
+        while True:
+            time.sleep(60)
+
     if args.exit_after_effect:
         _line(
             "PROGRESS RECORD",
@@ -190,7 +200,8 @@ def _demo_frame(agent: dict, ledger: list, *, stage_mode: bool = False):
         left.append("How can I help you?\n\n", style="bold cyan")
         if agent.get("_restarted"):
             left.append(
-                "NEW SESSION\n"
+                "REPLACEMENT WORKER\n"
+                "A new session has started.\n"
                 "The previous conversation is gone.\n"
                 "Ask for the refund again.",
                 style="yellow",
@@ -206,6 +217,9 @@ def _demo_frame(agent: dict, ledger: list, *, stage_mode: bool = False):
         amount = (context.get("amount") or 0) / 100
         left.append("YOU\n", style="bold yellow")
         left.append(f"  {agent.get('user_message', 'Please refund order 1234')}\n\n")
+        if agent.get("_effect_unrecorded"):
+            left.append("AGENT  ", style="bold cyan")
+            left.append("Refund issued.\n\n", style="bold")
         left.append("THE AGENT REMEMBERS\n", style="bold blue")
         left.append(
             f"  Customer {context.get('customer')}: "
@@ -232,7 +246,7 @@ def _demo_frame(agent: dict, ledger: list, *, stage_mode: bool = False):
     header_text = Text()
     header_text.append("Demo 1: The agent starts over\n", style="bold")
     header_text.append(
-        "The refund survives the crash. The agent's record of the attempt does not.",
+        "The refund survives when the Worker is replaced. Its progress does not.",
         style="dim",
     )
     header = Panel(header_text, border_style="cyan")
@@ -242,12 +256,18 @@ def _demo_frame(agent: dict, ledger: list, *, stage_mode: bool = False):
             "Nothing tied both attempts to one refund."
         )
         explanation_title = "WHAT WENT WRONG"
+    elif agent.get("_effect_unrecorded") and ledger:
+        explanation = (
+            "The refund succeeded. This Worker has not saved that progress.\n"
+            "Now replace it at this uncertain moment."
+        )
+        explanation_title = "REFUND ISSUED"
     elif agent.get("_restarted") and ledger:
         explanation = (
-            "The refund survived. The conversation did not.\n"
-            "The new session cannot see the previous attempt."
+            "A replacement Worker starts with a blank conversation.\n"
+            "It cannot see the previous attempt."
         )
-        explanation_title = "AFTER THE CRASH"
+        explanation_title = "AFTER REPLACEMENT"
     else:
         explanation = (
             "What happens if the refund succeeds, then this session disappears?"
@@ -258,11 +278,12 @@ def _demo_frame(agent: dict, ledger: list, *, stage_mode: bool = False):
         title=explanation_title,
         border_style="yellow",
     )
-    controls = (
-        "Type your refund request at the you> prompt"
-        if stage_mode
-        else "Type a refund request    restart / deploy / OOM    reset    quit"
-    )
+    if stage_mode and agent.get("_effect_unrecorded"):
+        controls = "Press Enter to replace this Worker"
+    elif stage_mode:
+        controls = "Type your refund request at the you> prompt"
+    else:
+        controls = "Type a refund request    restart / deploy / OOM    reset    quit"
     footer = Panel(
         controls,
         border_style="dim",
@@ -344,10 +365,16 @@ def main() -> None:
     refund = commands.add_parser("refund", help="process one refund")
     refund.add_argument("--order", default="1234")
     refund.add_argument("--amount-cents", type=int, default=8000)
-    refund.add_argument(
+    boundary = refund.add_mutually_exclusive_group()
+    boundary.add_argument(
         "--exit-after-effect",
         action="store_true",
         help="exit right after refunding, before recording completion",
+    )
+    boundary.add_argument(
+        "--hold-after-effect",
+        action="store_true",
+        help="wait after refunding so the process can be replaced at the boundary",
     )
 
     ledger = commands.add_parser("ledger", help="show the naive ledger")

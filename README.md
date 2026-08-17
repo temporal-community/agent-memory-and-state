@@ -60,9 +60,10 @@ database technology—determine which record wins.
 The dangerous gap is progress that is not coordinated with the external effect.
 Suppose the application calls Stripe and then writes a "done" marker. Stripe can
 commit the refund before the marker is written. Even if that marker lives in a
-durable database, a crash between the two writes leaves the next process unable
-to tell whether the refund happened. Persistence protects the marker after it
-exists; it does not make the marker and Stripe one atomic operation.
+durable database, replacing the process between the two writes leaves the next
+process unable to tell whether the refund happened. Persistence protects the
+marker after it exists; it does not make the marker and Stripe one atomic
+operation.
 
 Read [Memory, state, and authority](docs/CONCEPTS.md) for the complete model,
 including working and long-term memory, the lifespan framing, and the
@@ -74,7 +75,7 @@ exactly-once misconception.
 - Retrieving the same memory can reproduce the same decision and repeat the
   same mistake.
 - Persisting a completion marker after an external effect does not close the
-  crash gap between the two systems.
+  failure gap between the two systems.
 - A durable Workflow records where the work stands across Worker restarts.
 - Stripe remains authoritative about whether the refund exists.
 - One Workflow identity can become one effect idempotency key.
@@ -151,12 +152,13 @@ uv run refund-demo stage
 The guided runner:
 
 1. Shows the empty naive agent asking, "How can I help you?"
-2. Processes a refund and hard-kills the process.
-3. Rebuilds the same context and memory, then produces a duplicate refund.
-4. Sends the same request through a Temporal Workflow.
-5. Kills the Worker after the effect owner accepts the refund but before the
+2. Shows your request and the agent's “Refund issued” reply.
+3. Replaces that Worker before it saves its progress, opening a blank session.
+4. Rebuilds the same context and memory, then produces a duplicate refund.
+5. Sends the same request through a Temporal Workflow.
+6. Replaces the Worker after the effect owner accepts the refund but before the
    Activity reports completion.
-6. Starts a replacement Worker and resolves two calls to one refund.
+7. Starts a replacement Worker and resolves two calls to one refund.
 
 It uses a deterministic policy and offline Stripe-like ledger by default. It
 starts a local Temporal dev server only when one is not already reachable and
@@ -179,7 +181,7 @@ Put local values in `.env`; exported shell variables take precedence.
 
 | Uncoordinated progress | Authoritative state |
 | --- | --- |
-| The naive run crashes after the refund but before its separate completion marker, then issues a duplicate. | The durable run can call Stripe twice with one idempotency key and keep one refund. |
+| The naive Worker is replaced after the refund but before its separate completion marker, then issues a duplicate. | The durable run can call Stripe twice with one idempotency key and keep one refund. |
 | ![The naive demo showing two committed refunds and a duplicate warning](assets/naive-duplicate.png) | ![The durable demo showing two calls and one unique refund after recovery](assets/durable-recovered.png) |
 
 The durable side has two owners:

@@ -1,8 +1,8 @@
 """A guided, single-terminal version of the complete meetup demo.
 
 The stage runner owns the disposable processes it needs. It uses a private task
-queue and state directory, so it can start, hard-kill, and replace its Worker
-without touching another Worker the presenter may already have running.
+queue and state directory, so it can stop and replace its Worker without
+touching another Worker the presenter may already have running.
 """
 
 from __future__ import annotations
@@ -274,9 +274,7 @@ def _naive_ledger(stage_state: Path) -> list[dict[str, object]]:
     ]
 
 
-async def _run_naive(
-    stage_state: Path, *, crash_after_effect: bool, amount_cents: int
-) -> None:
+async def _run_naive(stage_state: Path, *, amount_cents: int) -> None:
     command = [
         sys.executable,
         "-m",
@@ -287,8 +285,6 @@ async def _run_naive(
         "--amount-cents",
         str(amount_cents),
     ]
-    if crash_after_effect:
-        command.append("--exit-after-effect")
     environment = os.environ.copy()
     environment["DEMO_STATE_DIR"] = str(stage_state)
     result = await asyncio.to_thread(
@@ -299,12 +295,57 @@ async def _run_naive(
         text=True,
         check=False,
     )
-    expected = 1 if crash_after_effect else 0
-    if result.returncode != expected:
+    if result.returncode != 0:
         raise RuntimeError(
             "naive demo process did not exit as expected:\n"
             + (result.stderr or result.stdout)
         )
+
+
+def _start_naive_at_boundary(
+    stage_state: Path, *, amount_cents: int
+) -> subprocess.Popen[str]:
+    environment = os.environ.copy()
+    environment["DEMO_STATE_DIR"] = str(stage_state)
+    return subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "refund_agent.naive_refund",
+            "refund",
+            "--order",
+            "1234",
+            "--amount-cents",
+            str(amount_cents),
+            "--hold-after-effect",
+        ],
+        env=environment,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+
+
+def _stop_naive_worker(process: subprocess.Popen[str] | None) -> None:
+    _stop_process(process, hard=True)
+    if process is not None and process.stdout is not None:
+        process.stdout.close()
+
+
+async def _wait_for_naive_effect(
+    process: subprocess.Popen[str], stage_state: Path, *, timeout: float = 10
+) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            output = process.stdout.read() if process.stdout is not None else ""
+            raise RuntimeError(
+                "naive Worker exited before issuing the refund:\n" + output
+            )
+        if _naive_ledger(stage_state):
+            return
+        await asyncio.sleep(0.05)
+    raise RuntimeError("timed out waiting for the naive refund")
 
 
 def _seed_test_payment(amount_cents: int) -> str:
@@ -373,24 +414,44 @@ async def run(
     os.environ["DEMO_STATE_DIR"] = str(stage_state)
     client: Client | None = None
     handle: WorkflowHandle | None = None
+    naive_worker: subprocess.Popen[str] | None = None
     completed = False
 
     try:
         _show(console, _intro(), "Press Enter to begin with the naive agent")
 
-        _ask_for_refund(
+        naive_request = _ask_for_refund(
             console,
             _demo_frame({}, [], stage_mode=True),
             "Ask the agent for a refund",
         )
-        with console.status(
-            "The naive process is issuing the refund, then crashing..."
-        ):
-            await _run_naive(
+        with console.status("The naive Worker is issuing the refund..."):
+            naive_worker = _start_naive_at_boundary(
                 stage_state,
-                crash_after_effect=True,
                 amount_cents=amount_cents,
             )
+            await _wait_for_naive_effect(naive_worker, stage_state)
+        first_attempt = {
+            "context": {
+                "order": "1234",
+                "amount": amount_cents,
+                "customer": "42",
+            },
+            "memory": {"tenure_days": 824, "prior_refunds": 1},
+            "user_message": naive_request,
+            "_effect_unrecorded": True,
+        }
+        _show(
+            console,
+            _demo_frame(
+                first_attempt,
+                _naive_ledger(stage_state),
+                stage_mode=True,
+            ),
+            "Press Enter to replace this Worker before it saves its progress",
+        )
+        _stop_naive_worker(naive_worker)
+        naive_worker = None
         repeated_request = _ask_for_refund(
             console,
             _demo_frame(
@@ -398,12 +459,11 @@ async def run(
                 _naive_ledger(stage_state),
                 stage_mode=True,
             ),
-            "The new session has no history. Ask for the refund again",
+            "The replacement Worker has no history. Ask for the refund again",
         )
         with console.status("A new process is rebuilding context and memory..."):
             await _run_naive(
                 stage_state,
-                crash_after_effect=False,
                 amount_cents=amount_cents,
             )
         recovered_naive = {
@@ -473,7 +533,7 @@ async def run(
         _show(
             console,
             await _durable_frame(client, workflow_id),
-            "Press Enter to hard-kill the Worker before it reports completion",
+            "Press Enter to replace this Worker before it reports completion",
         )
 
         services.kill_worker()
@@ -499,6 +559,7 @@ async def run(
         console.print(_closing())
         console.print(f"\nStage logs: {stage_state}", style="dim")
     finally:
+        _stop_naive_worker(naive_worker)
         if handle is not None and not completed:
             try:
                 await handle.terminate(reason="single-window stage runner closed")
