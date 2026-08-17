@@ -23,6 +23,10 @@ memory, and authoritative state visible.
 
 ## See the idea in 15 seconds
 
+![Animated comparison: the naive agent loses its answers and restarts, while the Temporal-backed agent resumes the saved loop](assets/demo-reel.gif)
+
+[Watch or download the MP4 version](assets/demo-reel.mp4).
+
 | Moment | Naive agent | Durable agent |
 | --- | --- | --- |
 | **Before the request** | Nyghtowl's plush python is paid in Stripe | The same paid order |
@@ -231,6 +235,7 @@ is whether the autonomous work itself still has a position:
 | Process-local loop | Durable execution |
 | --- | --- |
 | The answers and active loop disappear; Stripe only says paid with no refund. | Temporal retains completed observations and `Next action: issue refund`; the replacement continues without repeating questions. |
+| ![The naive replacement agent has lost the return answers and asks the customer to start again](assets/naive-loop-restarts.png) | ![The reloaded Temporal-backed agent completes the refund without repeating questions or restarting the loop](assets/durable-recovered.png) |
 
 The durable side has two owners:
 
