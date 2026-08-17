@@ -1,20 +1,13 @@
-"""Demo 1: a naive refund agent with no coordinated execution.
+"""Demo 1: authoritative effect state without coordinated execution state.
 
-The agent rebuilds its context and retrieves the same facts on every run. It
-calls the effect owner and then writes a separate completion marker. A restart
-(a deploy, eviction, OOM, or crash) between those writes leaves the next run
-unable to tell that the refund committed. Even if the later marker is durable,
-it is not atomic with the effect, so the next run refunds a second time.
+The refund system retains the successful refund when the Worker disappears. A
+replacement agent can query that system and reconstruct what happened, but
+nothing remembers that the interrupted customer request still needs an answer.
+The customer has to return and start a new status check.
 
-This is the same refund task as Demo 2, deliberately built the naive way so the
-restart issues a duplicate refund. Demo 2 is the same agent made durable, where
-it does not.
-
-Presenter flow:
-  naive-refund reset
-  naive-refund refund --order 1234 --exit-after-effect   # refunds, then exits
-  naive-refund refund --order 1234                         # restart, refunds AGAIN
-  naive-refund ledger                                      # two refunds, one order
+This is the same refund task as Demo 2. The effect survives in both. Demo 2 also
+retains where the application work stands, so a reloaded agent can resume
+without another customer message.
 """
 
 from __future__ import annotations
@@ -66,8 +59,9 @@ def _read_ledger() -> dict:
 
 
 def _append_refund(order: str, amount_cents: int) -> str:
-    # A naive refund: append with a fresh id every time, no idempotency key and
-    # no dedup. Running twice therefore commits two refunds.
+    # The effect owner accepts a new refund call. The caller checks existing
+    # effect state before reaching this function, but that check is still manual
+    # reconciliation rather than resumed execution.
     ledger = _read_ledger()
     refund_id = f"re_naive_{uuid.uuid4().hex[:12]}"
     ledger["refunds"].append(
@@ -79,8 +73,11 @@ def _append_refund(order: str, amount_cents: int) -> str:
     return refund_id
 
 
-def _refund_count(order: str) -> int:
-    return sum(1 for r in _read_ledger()["refunds"] if r["order_id"] == order)
+def _existing_refund(order: str) -> dict | None:
+    return next(
+        (refund for refund in _read_ledger()["refunds"] if refund["order_id"] == order),
+        None,
+    )
 
 
 def _refund(args: argparse.Namespace) -> None:
@@ -103,6 +100,18 @@ def _refund(args: argparse.Namespace) -> None:
         "PROGRESS RECORD",
         "no marker; cannot infer whether the external effect committed",
     )
+
+    existing = _existing_refund(order)
+    if existing is not None:
+        _line(
+            "EFFECT CHECK",
+            f"refund system confirms {existing['refund_id']} already succeeded",
+        )
+        _line(
+            "RECOVERY",
+            "result reconstructed because this new process checked",
+        )
+        return
 
     _line("MODEL REASONING", "approve (amount within policy, clean history)")
     refund_id = _append_refund(order, amount)
@@ -130,15 +139,6 @@ def _refund(args: argparse.Namespace) -> None:
         encoding="utf-8",
     )
     _line("PROGRESS RECORD", "recorded completion in a separate write")
-    count = _refund_count(order)
-    if count > 1:
-        _line(
-            "WARNING",
-            paint(
-                f"order {order} now has {count} refunds in the ledger, a duplicate",
-                "danger",
-            ),
-        )
 
 
 def _ledger(args: argparse.Namespace) -> None:
@@ -153,15 +153,6 @@ def _ledger(args: argparse.Namespace) -> None:
             f"{_money(refund['amount_cents'])}"
         )
         _line("THE SYSTEM", detail)
-    counts: dict[str, int] = {}
-    for refund in refunds:
-        counts[refund["order_id"]] = counts.get(refund["order_id"], 0) + 1
-    for order, count in counts.items():
-        if count > 1:
-            _line(
-                "WARNING",
-                paint(f"order {order}: {count} refunds (duplicate refund)", "danger"),
-            )
 
 
 def _reset(_args: argparse.Namespace) -> None:
@@ -181,6 +172,11 @@ def _process_interactive(
     agent["user_message"] = user_message
     agent["context"] = {"order": order, "amount": amount, "customer": customer}
     agent["memory"] = {"tenure_days": 824, "prior_refunds": 1}
+    existing = next((item for item in ledger if item["order"] == order), None)
+    if existing is not None:
+        agent["_status_checked"] = True
+        agent["note"] = "queried the refund system after a new customer message"
+        return
     if agent.get("recorded"):
         agent["note"] = "already refunded (it has that recorded), so it skips"
         return
@@ -205,7 +201,7 @@ def _demo_frame(agent: dict, ledger: list, *, stage_mode: bool = False):
                 "REPLACEMENT WORKER\n"
                 "A new session has started.\n"
                 "The previous conversation is gone.\n"
-                "Ask for the refund again.",
+                "It does not know that a reply is owed.",
                 style="yellow",
             )
         else:
@@ -213,6 +209,15 @@ def _demo_frame(agent: dict, ledger: list, *, stage_mode: bool = False):
                 "No conversation yet.\nAsk for a refund to begin.",
                 style="dim",
             )
+    elif agent.get("_status_checked"):
+        context = agent.get("context") or {}
+        amount = (context.get("amount") or 0) / 100
+        left.append("YOU\n", style="bold yellow")
+        left.append(f"  {agent.get('user_message', 'Did I get my refund?')}\n\n")
+        left.append("AGENT\n", style="bold cyan")
+        left.append("  Let me check the refund system.\n\n")
+        left.append("ANSWER\n", style="bold green")
+        left.append(f"  Yes — your ${amount:.2f} refund succeeded.\n", style="bold")
     else:
         context = agent.get("context") or {}
         memory = agent.get("memory") or {}
@@ -220,8 +225,12 @@ def _demo_frame(agent: dict, ledger: list, *, stage_mode: bool = False):
         left.append("YOU\n", style="bold yellow")
         left.append(f"  {agent.get('user_message', 'Please refund order 1234')}\n\n")
         if agent.get("_effect_unrecorded"):
-            left.append("AGENT  ", style="bold cyan")
-            left.append("Refund issued.\n\n", style="bold")
+            left.append("AGENT\n", style="bold cyan")
+            left.append("  Processing your refund...\n")
+            left.append(
+                "  No confirmation reached this conversation.\n\n",
+                style="yellow",
+            )
         left.append("THE AGENT REMEMBERS\n", style="bold blue")
         left.append(
             f"  Customer {context.get('customer')}: "
@@ -233,17 +242,11 @@ def _demo_frame(agent: dict, ledger: list, *, stage_mode: bool = False):
         left.append("  Approve the refund\n")
 
     right = Text()
-    right.append(f"REFUNDS ISSUED: {len(ledger)}\n\n", style="bold")
+    right.append(f"REFUND RECORDS: {len(ledger)}\n\n", style="bold")
     for number, entry in enumerate(ledger, start=1):
         amount = entry["amount"] / 100
         right.append(f"  Refund {number}: order {entry['order']}, ${amount:.2f}\n")
-    counts: dict[str, int] = {}
-    for entry in ledger:
-        counts[entry["order"]] = counts.get(entry["order"], 0) + 1
-    duplicate = any(count > 1 for count in counts.values())
-    if duplicate:
-        right.append("\nDUPLICATE REFUND\n", style="bold red")
-        right.append("The same order was refunded twice.\n", style="red")
+        right.append("  Status: succeeded\n")
 
     header_text = Text()
     header_text.append("Demo 1: The agent starts over\n", style="bold")
@@ -252,19 +255,22 @@ def _demo_frame(agent: dict, ledger: list, *, stage_mode: bool = False):
         style="dim",
     )
     header = Panel(header_text, border_style="cyan")
-    if duplicate:
+    if agent.get("_status_checked"):
         explanation = (
-            "The replacement Worker could not resume the first request.\n"
-            "It treated the customer's second message as new work."
+            "The agent found the refund because the customer asked again.\n"
+            "It did not pick up the interrupted request."
         )
-        explanation_title = "WHAT WENT WRONG"
+        explanation_title = "THE CUSTOMER RESTARTED THE WORK"
     elif agent.get("_effect_unrecorded") and ledger:
-        explanation = "The refund is recorded.\nThe completed customer request is not."
+        explanation = (
+            "The refund system has the answer.\n"
+            "Nothing remembers that this customer is still waiting for it."
+        )
         explanation_title = "WHAT IS MISSING"
     elif agent.get("_restarted") and ledger:
         explanation = (
-            "A replacement Worker starts with a blank conversation.\n"
-            "It cannot see the previous attempt."
+            "The refund record survived.\n"
+            "Nothing knows that a customer is still waiting."
         )
         explanation_title = "AFTER REPLACEMENT"
     else:
@@ -279,6 +285,10 @@ def _demo_frame(agent: dict, ledger: list, *, stage_mode: bool = False):
     )
     if stage_mode and agent.get("_effect_unrecorded"):
         controls = "Press Enter to replace this Worker"
+    elif stage_mode and agent.get("_status_checked"):
+        controls = "Press Enter to compare with durable execution"
+    elif stage_mode and agent.get("_restarted") and ledger:
+        controls = "Ask: Did I get my refund?"
     elif stage_mode:
         controls = "Type your refund request at the you> prompt"
     else:

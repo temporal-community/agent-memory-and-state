@@ -68,22 +68,22 @@ cached copy does not replace the owner.
 
 The dangerous band between memory and state is process-local progress:
 
-> I already issued the refund.
+> I am waiting for the refund result so I can answer this customer.
 
-In the simplest implementation this is only a belief held by one process. A
-deploy, eviction, restart, OOM, or network partition can remove it at exactly
-the point where an autonomous agent needs certainty.
+A deploy, eviction, restart, OOM, or network partition can remove that progress
+at exactly the point where the application owes a response. The refund itself
+does not disappear. The effect owner still has an authoritative record.
 
-In the naive demo, the effect owner still has one refund after the process
-restarts. The agent rebuilds the same context and retrieves the same customer
-facts, but its separate completion marker was never written. It repeats the
-decision and creates a duplicate.
+In the naive stage demo, the replacement agent can query that record after the
+customer asks, “Did I get my refund?” It answers correctly. This is effect state
+doing its job. The failure is that the customer had to return and initiate a new
+reconciliation because nothing remembered the interrupted application work.
 
-Moving that marker to a durable database does not, by itself, fix the failure.
-If the sequence is "call Stripe, then write done," the process can still die
-after Stripe commits and before the database write. The database then has no
-"done" record while Stripe durably records the refund. The problem is not only
-persistence; it is coordinating an uncertain effect across two owners.
+A database-backed operation row, queue, scheduler, and reconciliation state
+machine could remember and resume that work. Those pieces are execution state.
+A lone "done" marker written after Stripe is insufficient because the process
+can still disappear between the effect and the marker. Temporal is the durable
+execution implementation used in this demo, not the only possible one.
 
 ## Authority, not lifespan
 
@@ -128,10 +128,10 @@ to reconcile the retry with the effect it already owns.
 
 ## Why this changes the reloaded agent
 
-The customer-facing value is not only duplicate prevention. Stripe can make a
-repeated call safe when the caller supplies a stable idempotency key. Temporal
-owns a different problem: after the original Worker disappears, it retains the
-record that the logical refund is still running or has completed.
+Stripe can answer whether the refund happened, and the naive replacement agent
+demonstrates that by querying it. Temporal owns a different problem: after the
+original Worker disappears, it retains the record that the logical refund is
+still running or has completed and that the application work should resume.
 
 The application must reconnect the reloaded agent to the same Workflow ID. It
 can then surface the Workflow's current status or result instead of treating a

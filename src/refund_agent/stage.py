@@ -76,18 +76,21 @@ def _intro() -> Group:
 
 def _closing() -> Group:
     result = Text()
-    result.append("Naive: the customer had to ask again.\n", style="bold red")
+    result.append(
+        "Naive: the refund survived, but the customer had to ask for status.\n",
+        style="bold red",
+    )
     result.append(
         "Durable: the reloaded agent resumed the existing work.\n\n",
         style="bold green",
     )
-    result.append("No second request.  ", style="bold green")
+    result.append("No follow-up from the customer.  ", style="bold green")
     result.append("Two calls, one refund.", style="green")
     return Group(
         Panel(result, title="The difference", border_style="green"),
         Panel(
-            "The agent's view can disappear. The records needed for safe "
-            "recovery cannot.",
+            "The effect owner knows what happened. Execution state remembers "
+            "what still needs to finish.",
             border_style="white",
         ),
     )
@@ -324,34 +327,6 @@ def _naive_ledger(stage_state: Path) -> list[dict[str, object]]:
     ]
 
 
-async def _run_naive(stage_state: Path, *, amount_cents: int) -> None:
-    command = [
-        sys.executable,
-        "-m",
-        "refund_agent.naive_refund",
-        "refund",
-        "--order",
-        "1234",
-        "--amount-cents",
-        str(amount_cents),
-    ]
-    environment = os.environ.copy()
-    environment["DEMO_STATE_DIR"] = str(stage_state)
-    result = await asyncio.to_thread(
-        subprocess.run,
-        command,
-        env=environment,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(
-            "naive demo process did not exit as expected:\n"
-            + (result.stderr or result.stdout)
-        )
-
-
 def _start_naive_at_boundary(
     stage_state: Path, *, amount_cents: int
 ) -> subprocess.Popen[str]:
@@ -418,11 +393,17 @@ def _show(console: Console, renderable, cue: str) -> str:
     return input(f"\n{cue}  ")
 
 
-def _ask_for_refund(console: Console, renderable, cue: str) -> str:
+def _ask_for_refund(
+    console: Console,
+    renderable,
+    cue: str,
+    *,
+    default: str = _DEFAULT_REFUND_REQUEST,
+) -> str:
     console.clear()
     console.print(renderable)
     request = input(f"\n{cue}\nyou> ").strip()
-    return request or _DEFAULT_REFUND_REQUEST
+    return request or default
 
 
 async def _durable_frame(client: Client, workflow_id: str, *, recovered: bool = False):
@@ -518,20 +499,16 @@ async def run(
         )
         _stop_naive_worker(naive_worker)
         naive_worker = None
-        repeated_request = _ask_for_refund(
+        status_question = _ask_for_refund(
             console,
             _demo_frame(
                 {"_restarted": True},
                 _naive_ledger(stage_state),
                 stage_mode=True,
             ),
-            "The replacement Worker has no history. Ask for the refund again",
+            "The replacement Worker has no pending request. Ask about the refund",
+            default="Did I get my refund?",
         )
-        with console.status("A new process is rebuilding context and memory..."):
-            await _run_naive(
-                stage_state,
-                amount_cents=amount_cents,
-            )
         recovered_naive = {
             "context": {
                 "order": "1234",
@@ -539,9 +516,9 @@ async def run(
                 "customer": "42",
             },
             "memory": {"tenure_days": 824, "prior_refunds": 1},
-            "recorded": True,
-            "note": "new process retrieved the same knowledge and acted again",
-            "user_message": repeated_request,
+            "_status_checked": True,
+            "note": "new process queried the effect owner after the customer asked",
+            "user_message": status_question,
         }
         _show(
             console,

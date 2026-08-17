@@ -13,32 +13,24 @@
 still forget the work.**
 
 The same refund request goes through two plain-Python agents. The naive agent
-rebuilds its context and retrieves the same facts after a Worker restart, but
-needs the customer to ask again and may refund them twice. The durable agent
-reconnects to the existing Temporal Workflow, resumes the unresolved work, and
-can report completion without another customer request. Stripe remains the
-effect owner, so a retry with the same identity still resolves to one refund.
+loses the interrupted interaction after a Worker restart. Stripe still knows
+the refund succeeded, so the customer can return, ask for status, and make a new
+agent check. The durable agent reconnects to the existing Temporal Workflow,
+resumes the unresolved work, and reports completion without another customer
+message.
 
 There is no agent framework. The point is to make the boundary between context,
 memory, and authoritative state visible.
 
 ## See the idea in 15 seconds
 
-![Animated comparison of the naive and durable refund demos](assets/demo-reel.gif)
-
-[Watch or download the MP4 version](assets/demo-reel.mp4).
-
-The reel shows the effect-safety backstop. The guided stage adds the primary
-customer-facing payoff: the reloaded agent answers without asking the customer
-to submit the refund again.
-
 | Moment | Naive agent | Durable agent |
 | --- | --- | --- |
 | **Before the request** | Empty process, ready for work | Empty process, ready for work |
-| **After the refund call** | The effect exists; its separate completion marker was not written | Temporal records the attempt; Stripe records the effect |
-| **Worker disappears** | A new process sees no completion record | The process view disappears; both authoritative records remain |
-| **Agent reloads** | The customer asks again; the agent may act again | Reconnects to the same Workflow; **no second request** |
-| **Uncertain effect resolves** | A new operation may create a second refund | A retry keeps the same identity; **one refund** |
+| **After the refund call** | Stripe records success; the reply is lost with the Worker | Temporal records the open attempt; Stripe records success |
+| **Worker disappears** | The refund fact survives; the interrupted interaction does not | The process view disappears; both authoritative records remain |
+| **Agent reloads** | No pending request; the customer asks, “Did I get my refund?” | Reconnects to the same Workflow; **no second message** |
+| **Outcome** | A new agent checks Stripe and answers correctly | The existing work resumes and returns the answer |
 
 ## The boundary that matters
 
@@ -65,12 +57,17 @@ is authoritative domain state. When copies disagree, the role and owner—not th
 database technology—determine which record wins.
 
 The dangerous gap is progress that is not coordinated with the external effect.
-Suppose the application calls Stripe and then writes a "done" marker. Stripe can
-commit the refund before the marker is written. Even if that marker lives in a
-durable database, replacing the process between the two writes leaves the next
-process unable to tell whether the refund happened. Persistence protects the
-marker after it exists; it does not make the marker and Stripe one atomic
-operation.
+Suppose the application calls Stripe and then disappears before returning the
+result to the customer. Stripe can still answer whether the refund happened; a
+replacement agent can query it. What Stripe does not own is the application
+work: who was waiting, which step was interrupted, and what should happen next.
+Without execution state, the customer or a separate reconciliation process must
+start that work again.
+
+A durable job table or a carefully built state machine can also provide
+execution state. Temporal is the implementation used here: it records the open
+operation, retries uncertain work with a stable identity, and supplies the point
+from which the application resumes.
 
 Read [Memory, state, and authority](docs/CONCEPTS.md) for the complete model,
 including working and long-term memory, the lifespan framing, and the
@@ -78,11 +75,12 @@ exactly-once misconception.
 
 ## What this demo proves
 
-- Reconstructing context does not prove whether a prior effect committed.
-- Retrieving the same memory can reproduce the same decision and repeat the
-  same mistake.
-- Persisting a completion marker after an external effect does not close the
-  failure gap between the two systems.
+- Stripe's authoritative record lets a replacement agent reconstruct whether
+  the refund committed.
+- Effect state does not remember that an interrupted customer interaction still
+  needs an answer.
+- Without execution state, recovery requires a new customer request or a custom
+  reconciliation process.
 - A durable Workflow records where the work stands across Worker restarts.
 - A reloaded agent can reconnect to that Workflow and report running or
   completed work instead of starting a new operation.
@@ -161,9 +159,11 @@ uv run refund-demo stage
 The guided runner:
 
 1. Shows the empty naive agent asking, "How can I help you?"
-2. Shows your request and the agent's “Refund issued” reply.
-3. Replaces that Worker before it saves its progress, opening a blank session.
-4. Rebuilds the same context and memory, then produces a duplicate refund.
+2. Shows your request beside the refund system's successful record, before a
+   confirmation reaches the conversation.
+3. Replaces that Worker, opening a blank session while the refund record remains.
+4. Lets you ask, “Did I get my refund?” The new agent checks the refund system
+   and answers correctly—a new reconciliation initiated by the customer.
 5. Sends the same request through a Temporal Workflow.
 6. Replaces the Worker after the effect owner accepts the refund but before the
    Activity reports completion.
@@ -201,27 +201,26 @@ that no refund was issued instead of exiting on an empty screen.
 
 The primary payoff is customer-facing:
 
-> The naive agent needs the customer to ask again. The reloaded durable agent
-> reconnects to the existing work and says, “Your refund is complete.”
+> The naive agent needs the customer to return and ask for status. The reloaded
+> durable agent reconnects to the existing work and says, “Your refund is
+> complete.”
 
-The screenshots below show the supporting effect-safety result. Stripe makes a
-repeated call safe; Temporal remembers that the unresolved step still needs to
-finish after the original Worker disappears.
+The naive answer is not wrong. It proves that effect state is useful and should
+be queried. The contrast is who restarts the application work:
 
-| Uncoordinated progress | Authoritative state |
+| Manual reconciliation | Durable execution |
 | --- | --- |
-| The naive Worker is replaced after the refund but before its separate completion marker, then issues a duplicate. | The durable run can call Stripe twice with one idempotency key and keep one refund. |
-| ![The naive demo showing two committed refunds and a duplicate warning](assets/naive-duplicate.png) | ![The durable demo showing two calls and one unique refund after recovery](assets/durable-recovered.png) |
+| Stripe has the answer, but the customer returns and starts a new status check. | Temporal retains the open work, and the reloaded agent surfaces its result without another message. |
 
 The durable side has two owners:
 
 - **Temporal** owns the Activity attempt and execution progress.
 - **Stripe** owns whether the refund committed.
 
-A recorded call is not proof that money moved, and a later "done" write cannot
-be atomic with Stripe. Temporal durably records the attempt and supplies the
-recovery point; the shared identity lets the retry reconcile with Stripe rather
-than infer the result from memory or an absent completion marker.
+A recorded call is not proof that money moved, and Stripe's refund record does
+not say which application interaction is waiting for that result. Temporal
+durably records the attempt and supplies the recovery point; the shared identity
+lets the retry reconcile with Stripe rather than infer the result from memory.
 
 ## Explore the demos
 

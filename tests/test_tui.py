@@ -7,7 +7,7 @@ pytest.importorskip("rich")
 from rich.console import Console
 
 from refund_agent import tui
-from refund_agent.naive_refund import _demo_frame
+from refund_agent.naive_refund import _demo_frame, _process_interactive
 
 
 def test_agent_panel_starts_with_same_invitation_as_naive_demo(
@@ -99,7 +99,7 @@ def test_naive_restart_returns_to_a_blank_conversation() -> None:
     assert "previous conversation is gone" in text
     assert "AFTER REPLACEMENT" in text
     assert "WHAT WENT WRONG" not in text
-    assert "Type your refund request at the you> prompt" in text
+    assert "Ask: Did I get my refund?" in text
 
 
 def test_naive_first_refund_holds_on_the_agent_reply() -> None:
@@ -118,34 +118,47 @@ def test_naive_first_refund_holds_on_the_agent_reply() -> None:
     text = output.getvalue()
 
     assert "Please refund my plush python" in text
-    assert "Refund issued." in text
+    assert "Processing your refund" in text
+    assert "No confirmation reached this conversation" in text
     assert "WHAT IS MISSING" in text
-    assert "The refund is recorded" in text
-    assert "The completed customer request is not" in text
+    assert "refund system has the answer" in text
+    assert "customer is still waiting" in text
     assert "Press Enter to replace this Worker" in text
     assert "crash" not in text.lower()
 
 
-def test_naive_duplicate_explains_lost_execution_progress() -> None:
+def test_naive_status_check_uses_effect_state_without_resuming_work() -> None:
     frame = _demo_frame(
         {
-            "user_message": "Please refund my plush python",
+            "user_message": "Did I get my refund?",
             "context": {"order": "1234", "amount": 8000, "customer": "42"},
             "memory": {"tenure_days": 824, "prior_refunds": 1},
+            "_status_checked": True,
         },
-        [
-            {"refund_id": "r1", "order": "1234", "amount": 8000},
-            {"refund_id": "r2", "order": "1234", "amount": 8000},
-        ],
+        [{"refund_id": "r1", "order": "1234", "amount": 8000}],
         stage_mode=True,
     )
     output = io.StringIO()
     Console(file=output, width=128).print(frame)
     text = output.getvalue()
 
-    assert "could not resume the first request" in text
-    assert "treated the customer's second message as new work" in text
-    assert "tied both attempts to one refund" not in text
+    assert "Let me check the refund system" in text
+    assert "your $80.00 refund succeeded" in text
+    assert "THE CUSTOMER RESTARTED THE WORK" in text
+    assert "did not pick up the interrupted request" in text
+    assert "DUPLICATE REFUND" not in text
+
+
+def test_naive_status_check_does_not_issue_another_refund() -> None:
+    agent: dict = {}
+    ledger: list = []
+    _process_interactive(agent, ledger, "Please refund my plush python")
+
+    replacement_agent: dict = {"_restarted": True}
+    _process_interactive(replacement_agent, ledger, "Did I get my refund?")
+
+    assert len(ledger) == 1
+    assert replacement_agent["_status_checked"] is True
 
 
 def test_naive_stage_frame_does_not_stretch_to_terminal_height() -> None:

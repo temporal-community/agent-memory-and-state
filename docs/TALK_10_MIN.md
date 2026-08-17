@@ -2,16 +2,16 @@
 
 ## North star
 
-> An agent can remember everything the customer said and still refund them
-> twice.
+> A refund can succeed while the agent forgets it still owes the customer an
+> answer.
 
 The audience should leave with three ideas:
 
 1. Context, memory, and state can all inform an agent.
-2. When copies disagree, the owner of the fact is authoritative.
-3. Temporal lets a reloaded agent reconnect to existing work; the effect system
-   still owns whether the world changed. A stable identity connects them during
-   recovery.
+2. The effect owner can prove what happened without knowing which application
+   work still needs to finish.
+3. Temporal lets a reloaded agent reconnect to that unfinished work. A stable
+   identity connects execution recovery to the effect owner's record.
 
 ## Commands
 
@@ -58,10 +58,11 @@ that the reasoning turn was live.
 
 “Agents are getting much better at remembering: larger context windows,
 retrieval, summaries, and long-term memory. But remembering what the customer
-said is not the same as knowing what your software already did.
+said is not the same as remembering that your application still owes them an
+answer.
 
-An agent can remember everything the customer said and still refund them
-twice.”
+A refund can succeed while the agent forgets it is in the middle of helping the
+customer.”
 
 “I am going to lose a real process at the worst possible boundary twice. What
 changes is how execution progress is recorded and whether the effect keeps a
@@ -95,7 +96,7 @@ Point to the agent view on the left and the effect owner on the right.
 
 **Checkpoint:** Begin the naive failure by **1:30**.
 
-### 1:30–3:15 — Naive recovery guesses
+### 1:30–3:15 — Naive recovery waits for the customer
 
 **Say before sending the request**
 
@@ -104,37 +105,41 @@ Point to the agent view on the left and the effect owner on the right.
 **Action**
 
 At the `you>` prompt, ask the agent for the refund in your own words. The refund
-commits. Pause on the agent's “Refund issued” reply, then press Enter to replace
-the Worker before its separate completion marker is written.
+commits, but confirmation does not reach the conversation. Pause with the
+successful refund record visible on the right, then press Enter to replace the
+Worker.
 
 **Say over the one-refund frame**
 
-“The refund is recorded. The completed customer request is not. Now this
-Worker is replaced. A durable done flag written afterward would have the same
-gap.”
+“The refund system has the answer: the refund succeeded. But no durable
+execution remembers that this customer is still waiting for that answer.”
 
 **Action**
 
-The screen reloads with `REPLACEMENT WORKER` and no chat history. Ask for the
-same refund again. Pause on `DUPLICATE REFUND`.
+The screen reloads with `REPLACEMENT WORKER`, no chat history, and the same
+successful refund record on the right. Ask, “Did I get my refund?” Pause on the
+agent's “Let me check” and successful answer.
 
 **Say**
 
-“Same context. Same retrieved memory. Same reasonable decision. A second
-refund. More memory reproduced the decision; it did not prove the effect.”
+“And that answer is correct. Stripe kept the authoritative fact. But notice who
+restarted the work: the customer. This is a new reconciliation triggered by a
+new message, not the interrupted interaction resuming.”
 
-**Checkpoint:** The duplicate must be visible by **3:15**.
+**Checkpoint:** `THE CUSTOMER RESTARTED THE WORK` must be visible by **3:15**.
 
-### 3:15–3:45 — Ask who knows
+### 3:15–3:45 — Separate the two questions
 
 **Ask the audience**
 
-“Did the first refund happen? Which record gets to answer?”
+“Who knows whether the refund happened? Stripe. Who knows that this customer is
+still waiting for an answer?”
 
 Pause briefly.
 
-“Not the reconstructed context. Not the agent's recollection. Not an absent
-done marker. The effect owner answers whether the refund committed.”
+“In the naive system, nobody—until the customer comes back. Effect state tells
+us what happened. Execution state tells the application what still needs to
+finish.”
 
 **Action**
 
@@ -186,11 +191,11 @@ REQUEST` and “Your refund is complete.”
 
 **Say**
 
-“On the naive side, the customer had to ask again. Here they asked once. The
-reloaded agent reconnects to the same work and can say, ‘Your refund is
-complete.’ Temporal retried the unresolved step with the same operation
-identity, and the effect owner returned the original result: two calls, one
-refund.”
+“On the naive side, Stripe had the right answer, but the customer had to come
+back and ask for it. Here they asked once. The reloaded agent reconnects to the
+same work and can say, ‘Your refund is complete.’ Temporal retried the unresolved
+step with the same operation identity, and the effect owner returned the
+original result: two calls, one refund.”
 
 **Checkpoint:** The recovered result should be visible by **6:30**.
 
@@ -214,6 +219,10 @@ memory.”
 
 “That is the relationship between agent memory and durable execution: memory
 helps reasoning continue; Temporal helps the operation continue.”
+
+“Could I build this with a database, queue, and reconciliation job? Yes. That is
+building execution state. Temporal is the durable execution system in this
+demo.”
 
 ### 8:30–9:30 — Show only the boundary
 
@@ -247,9 +256,9 @@ roles.
 
 Memory helps choose the next action.
 
-Temporal remembers where execution stands.
+The effect owner knows what happened.
 
-The effect owner knows whether the world changed.”
+Execution state remembers what still needs to finish.”
 
 “Do not ask agent memory to serve as proof of an external effect. Give the work
 a durable execution owner, and carry one identity across the systems that must
@@ -260,13 +269,13 @@ recover it.”
 | Control | Screen or action | Target time |
 | --- | --- | --- |
 | Enter | Empty naive agent | 0:45 |
-| Type refund request | Your message and `Refund issued` remain visible | 1:45 |
+| Type refund request | Your message and the successful refund record remain visible | 1:45 |
 | Enter | Replacement Worker opens with no chat history | 2:05 |
-| Type request again | New session repeats decision; duplicate appears | 2:45 |
+| Ask “Did I get my refund?” | New agent checks Stripe; `THE CUSTOMER RESTARTED THE WORK` appears | 2:45 |
 | Enter | Empty durable agent | 3:45 |
 | Type refund request | Effect accepted; completion uncertain | 4:30 |
 | Enter | Current Worker replaced; `WORKER GONE` | 5:15 |
-| Enter | Reloaded agent answers without a second request | 6:15 |
+| Enter | Reloaded agent answers without customer follow-up | 6:15 |
 | Enter | Final takeaway | 9:30 |
 
 ## If time slips
@@ -291,7 +300,7 @@ recover it.”
 
 ## Rehearsal scorecard
 
-| Attempt | Mode | Total | Duplicate by 3:15 | No-second-request payoff | Owners named | No “exactly once” claim | Close from memory | Notes |
+| Attempt | Mode | Total | Manual recovery by 3:15 | No-follow-up payoff | Owners named | No “exactly once” claim | Close from memory | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 |  |  |  |  |  |  |  |  |
 | 2 |  |  |  |  |  |  |  |  |
@@ -301,8 +310,11 @@ recover it.”
 
 **Why not query Stripe before refunding?**
 
-A separate read followed by a write still races with another caller. Retrying
-the same idempotent operation asks the effect owner to reconcile one identity.
+You should query authoritative effect state when answering what happened; the
+naive demo now does. That still does not remember which interrupted application
+work is waiting for the answer. For issuing or retrying a refund, a separate
+read followed by a write can also race with another caller, so a stable
+idempotency key remains important.
 
 **Could Stripe handle the retry without Temporal?**
 
@@ -313,10 +325,12 @@ progress, and exposes the result to the reloaded application. A team can build
 those pieces with a database, queue, scheduler, and state machine; Temporal is
 the durable execution system used here.
 
-**Why not put the done flag in a database?**
+**Why not put the execution state in a database?**
 
-The Worker can disappear after Stripe commits and before the database write. A
-durable flag does not make two systems one transaction.
+You can. A durable operation row plus a queue, retry policy, stable identity,
+and reconciliation logic can solve this. A lone done flag written after Stripe
+still has a failure gap; a full state machine is durable execution. Temporal is
+the implementation shown here.
 
 **Is Temporal the agent's memory?**
 

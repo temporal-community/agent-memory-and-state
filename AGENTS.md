@@ -21,6 +21,13 @@ model.
 
 - The durable customer asks once. After the Worker is replaced, the reloaded
   agent reconnects to the same Workflow and says, “Your refund is complete.”
+- The naive refund system retains an authoritative successful-refund record.
+  The replacement agent may query it and answer correctly after the customer
+  asks for status. Never imply that the effect fact disappeared or was
+  unavailable.
+- The naive failure is manual reconciliation: nothing durable remembers that
+  the interrupted customer request is still waiting for an answer. The customer
+  must return and trigger a new check.
 - Do not claim Temporal prevents duplicate refunds by itself. Stripe's
   idempotency support makes the repeated effect call safe; Temporal remembers
   that an unresolved step needs recovery and drives it to completion.
@@ -35,9 +42,9 @@ model.
 - General-audience stage copy should use plain language such as “Worker gone,”
   “replacement Worker,” and “reloaded agent.” Keep SDK and event-history terms
   in the detailed `refund-demo watch` and inspection paths.
-- The naive side deliberately requires the customer to ask again. Its missing
-  coordinated progress may also produce a duplicate refund, but that is not the
-  only payoff of the comparison.
+- Do not make a duplicate refund the naive stage payoff. A competent replacement
+  agent can query the authoritative refund system. Contrast that customer-driven
+  reconciliation with Temporal resuming unfinished application work.
 
 ## Implementation boundaries
 

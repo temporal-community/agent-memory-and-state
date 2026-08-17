@@ -129,10 +129,12 @@ def test_stage_role_copy_separates_context_memory_and_state() -> None:
 def test_stage_closing_states_the_observable_outcome() -> None:
     panels = list(_closing().renderables)
 
-    assert "customer had to ask again" in panels[0].renderable.plain
+    assert "customer had to ask for status" in panels[0].renderable.plain
     assert "reloaded agent resumed" in panels[0].renderable.plain
-    assert "No second request" in panels[0].renderable.plain
+    assert "No follow-up from the customer" in panels[0].renderable.plain
     assert "Two calls, one refund" in panels[0].renderable.plain
+    assert "effect owner knows what happened" in panels[1].renderable
+    assert "what still needs to finish" in panels[1].renderable
 
 
 def test_stage_accepts_a_spoken_refund_request(monkeypatch) -> None:
@@ -149,6 +151,19 @@ def test_stage_keeps_enter_as_a_refund_shortcut(monkeypatch) -> None:
     request = _ask_for_refund(_FakeConsole(), object(), "Ask for a refund")
 
     assert "refund order 1234" in request
+
+
+def test_stage_can_default_to_the_status_question(monkeypatch) -> None:
+    monkeypatch.setattr("builtins.input", lambda _prompt: "")
+
+    request = _ask_for_refund(
+        _FakeConsole(),
+        object(),
+        "Ask about the refund",
+        default="Did I get my refund?",
+    )
+
+    assert request == "Did I get my refund?"
 
 
 def test_stage_reads_scripted_naive_ledger(tmp_path) -> None:

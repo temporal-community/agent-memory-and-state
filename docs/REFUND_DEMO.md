@@ -9,10 +9,12 @@ uv run refund-demo stage
 This guide exposes every process and recovery step separately. Use it for
 development, rehearsal, debugging, or a longer technical walkthrough.
 
-The guided stage makes the customer-facing contrast explicit. The naive agent
-opens a blank session and needs the customer to ask again. The durable side
-reloads against the same Workflow, resumes the existing refund, and answers
-“Your refund is complete” without a second customer request.
+The guided stage makes the customer-facing contrast explicit. On the naive
+side, the refund record survives but the interrupted interaction does not. The
+customer returns and asks for status; a new agent queries the refund system and
+answers correctly. The durable side reloads against the same Workflow, resumes
+the existing refund, and answers “Your refund is complete” without a second
+customer message.
 
 ## Setup
 
@@ -102,21 +104,20 @@ Run the naive two-pane agent:
 uv run naive-refund
 ```
 
-The left pane shows context, retrieved copies in working memory, and a progress
-record separate from the effect. The right pane is the effect owner, a durable
-ledger of committed refunds.
+The left pane shows the process-local interaction. The right pane is the effect
+owner, a durable ledger of committed refunds.
 
 1. Press Enter or type `refund`. The agent decides and refunds. Its progress
    record is separate from the effect.
 2. Type `restart`. The process view disappears while the ledger retains one
    refund.
-3. Press Enter again. The fixture rebuilds the same request and retrieves the
-   same facts, but it cannot infer the effect from its missing progress record.
-4. The ledger now shows a duplicate refund.
+3. Ask, `Did I get my refund?`
+4. The replacement agent checks the refund ledger and answers correctly.
 
-The scripted path makes the crash gap explicit: the effect commits before the
-completion marker is written. Putting that later marker in durable storage
-would not make its write atomic with the effect owner's write.
+This is manual reconciliation, not resumed work. The effect owner knows what
+happened, but it does not own the interrupted customer interaction. A custom
+database state machine and recovery job could supply that missing execution
+state; Temporal is the implementation shown on the durable side.
 
 Use `reset` to start over and `quit` to exit.
 

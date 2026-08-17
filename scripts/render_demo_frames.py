@@ -106,11 +106,6 @@ def _render_naive_frames(output_dir: Path) -> None:
         "order": "1234",
         "amount": 8000,
     }
-    second_refund = {
-        "refund_id": "re_naive_95b8d412",
-        "order": "1234",
-        "amount": 8000,
-    }
     active_agent = {
         "user_message": "Please refund order 1234",
         "context": {"order": "1234", "amount": 8000, "customer": "42"},
@@ -118,11 +113,12 @@ def _render_naive_frames(output_dir: Path) -> None:
         "_effect_unrecorded": True,
         "note": "issued re_naive_4f31a3c1 before saving progress",
     }
-    duplicate_agent = {
-        **active_agent,
-        "_effect_unrecorded": False,
-        "recorded": True,
-        "note": "issued re_naive_95b8d412, then wrote a separate done marker",
+    status_agent = {
+        "user_message": "Did I get my refund?",
+        "context": {"order": "1234", "amount": 8000, "customer": "42"},
+        "memory": {"tenure_days": 824, "prior_refunds": 1},
+        "_status_checked": True,
+        "note": "new process queried the effect owner after the customer asked",
     }
     frames = [
         (
@@ -141,13 +137,9 @@ def _render_naive_frames(output_dir: Path) -> None:
             "Naive demo — replacement Worker",
         ),
         (
-            "04-naive-duplicate.html",
-            _demo_frame(
-                duplicate_agent,
-                [first_refund, second_refund],
-                stage_mode=True,
-            ),
-            "Naive demo — duplicate refund",
+            "04-naive-status-check.html",
+            _demo_frame(status_agent, [first_refund], stage_mode=True),
+            "Naive demo — manual status check",
         ),
     ]
     for filename, renderable, title in frames:
