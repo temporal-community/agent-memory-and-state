@@ -2,16 +2,16 @@
 
 ## North star
 
-> A refund can succeed while the agent forgets it still owes the customer an
-> answer.
+> An agent can remember everything the customer said and still lose the work
+> they submitted.
 
 The audience should leave with three ideas:
 
 1. Context, memory, and state can all inform an agent.
-2. The effect owner can prove what happened without knowing which application
-   work still needs to finish.
-3. Temporal lets a reloaded agent reconnect to that unfinished work. A stable
-   identity connects execution recovery to the effect owner's record.
+2. Stripe can prove what reached Stripe, but it cannot recover application work
+   it never received.
+3. Temporal lets a reloaded agent reconnect to accepted, unfinished work. A
+   stable identity also connects later effect retries to Stripe's record.
 
 ## Commands
 
@@ -57,16 +57,12 @@ that the reasoning turn was live.
 **Say**
 
 “Agents are getting much better at remembering: larger context windows,
-retrieval, summaries, and long-term memory. But remembering what the customer
-said is not the same as remembering that your application still owes them an
-answer.
+retrieval, summaries, and long-term memory. But an agent can remember everything
+the customer said and still lose the work they submitted.”
 
-A refund can succeed while the agent forgets it is in the middle of helping the
-customer.”
-
-“I am going to lose a real process at the worst possible boundary twice. What
-changes is how execution progress is recorded and whether the effect keeps a
-stable identity.”
+“I am going to replace a real Worker after it accepts a completed return form
+but before Stripe receives the refund request. What changes is whether the
+application work has a durable owner.”
 
 **Action**
 
@@ -96,49 +92,49 @@ Point to the agent view on the left and the effect owner on the right.
 
 **Checkpoint:** Begin the naive failure by **1:30**.
 
-### 1:30–3:15 — Naive recovery waits for the customer
+### 1:30–3:15 — The naive Worker loses a submitted form
 
 **Say before sending the request**
 
-“The left side is this agent session. The right side is the refund system.”
+“Nyghtowl already bought the plush python. Stripe says the payment is paid. The
+left side is this agent session; the right side is what Stripe actually knows.”
 
 **Action**
 
-At the `you>` prompt, ask the agent for the refund in your own words. The refund
-commits, but confirmation does not reach the conversation. Pause with the
-successful refund record visible on the right, then press Enter to replace the
-Worker.
+At the `you>` prompt, ask for a refund. Press Enter through the three prefilled
+answers: opened, damage, and refund destination. Pause on `RETURN FORM —
+SUBMITTED`, then press Enter to replace the Worker.
 
-**Say over the one-refund frame**
+**Say over the submitted-form frame**
 
-“The refund system has the answer: the refund succeeded. But no durable
-execution remembers that this customer is still waiting for that answer.”
+“The Worker accepted the form, but it only exists in this process. Stripe still
+shows paid and no refund because Stripe has not been called.”
 
 **Action**
 
-The screen reloads with `REPLACEMENT WORKER`, no chat history, and the same
-successful refund record on the right. Ask, “Did I get my refund?” Pause on the
-agent's “Let me check” and successful answer.
+The screen reloads with `REPLACEMENT WORKER` and the same authoritative Stripe
+state on the right. Ask, “What happened to my refund?” Pause on the answer that
+no request reached Stripe and the return details must be entered again.
 
 **Say**
 
-“And that answer is correct. Stripe kept the authoritative fact. But notice who
-restarted the work: the customer. This is a new reconciliation triggered by a
-new message, not the interrupted interaction resuming.”
+“That answer is correct. Stripe can prove there is no refund. But Stripe cannot
+recreate whether the package was opened, what was damaged, or where Nyghtowl
+wanted the money sent. The customer has to start over.”
 
-**Checkpoint:** `THE CUSTOMER RESTARTED THE WORK` must be visible by **3:15**.
+**Checkpoint:** `THE CUSTOMER MUST START OVER` must be visible by **3:15**.
 
 ### 3:15–3:45 — Separate the two questions
 
 **Ask the audience**
 
-“Who knows whether the refund happened? Stripe. Who knows that this customer is
-still waiting for an answer?”
+“Stripe says paid and no refund. Is Stripe missing anything?”
 
 Pause briefly.
 
-“In the naive system, nobody—until the customer comes back. Effect state tells
-us what happened. Execution state tells the application what still needs to
+“No. Stripe is exactly right. The application lost a different fact: a completed
+return request had been accepted and still needed to run. Effect state tells us
+what reached Stripe. Execution state tells the application what still needs to
 finish.”
 
 **Action**
@@ -149,18 +145,18 @@ Press Enter to prepare the durable version.
 
 **Say before sending the request**
 
-“Now Temporal owns execution progress. The effect owner still owns the refund.
-Temporal does not replace Stripe and does not turn the two systems into one
-transaction.”
+“Now Temporal owns the accepted application work. Stripe still owns the payment
+and refund. Temporal does not replace Stripe.”
 
 **Action**
 
-At the `you>` prompt, ask the Temporal-backed agent for the refund. On the
-in-flight frame, point out:
+At the `you>` prompt, ask the Temporal-backed agent for the refund. The same
+return details are submitted as Workflow input. On the saved-request frame,
+point out:
 
-- Temporal: the refund step is still open; the Worker has not reported back.
-- Refund system: the refund succeeded; one call produced one refund.
-- Temporal has not received the completion yet.
+- Temporal: refund request saved; return details saved; waiting to continue.
+- Stripe: payment paid; no refund yet.
+- Both systems are correct, and their records answer different questions.
 
 The live request must refer to order 1234 or the plush python. The stage's fixed
 policy record says this low-value damaged item is eligible without a physical
@@ -169,8 +165,8 @@ Rehearse the live model against the offline ledger before adding `--real`.
 
 **Say**
 
-“This is the uncertain boundary: the world changed, but the Worker has not
-reported completion.”
+“This is the same boundary as before: the app accepted the form, but Stripe has
+not been called. The difference is that accepted work now has a durable owner.”
 
 **Action**
 
@@ -179,23 +175,21 @@ seconds.
 
 **Say while pointing right**
 
-“The context and working view disappeared with the Worker. Temporal still owns
-where execution stands. The effect system still owns the refund outcome. The
-Worker is disposable; the execution is not.”
+“The conversation and working view disappeared with the Worker. Temporal still
+has the submitted request and every form answer. Stripe still correctly says no
+refund. The Worker is disposable; the accepted work is not.”
 
 **Action**
 
-Press Enter to start the replacement Worker. After recovery, point to `calls 2`
-and `unique refunds 1`, but make the left pane the headline: `NO NEW CUSTOMER
-REQUEST` and “Your refund is complete.”
+Press Enter to start the replacement Worker. After recovery, make the left pane
+the headline: `NO NEW FORM`, `NO RE-ENTRY`, and “Your refund is complete.” Point
+right to Stripe's successful refund.
 
 **Say**
 
-“On the naive side, Stripe had the right answer, but the customer had to come
-back and ask for it. Here they asked once. The reloaded agent reconnects to the
-same work and can say, ‘Your refund is complete.’ Temporal retried the unresolved
-step with the same operation identity, and the effect owner returned the
-original result: two calls, one refund.”
+“On the naive side, Stripe had the right answer and the customer still had to
+re-enter the form. Here the reloaded agent reconnects to the same submitted work
+and can say, ‘Your refund is complete.’”
 
 **Checkpoint:** The recovered result should be visible by **6:30**.
 
@@ -205,17 +199,17 @@ original result: two calls, one refund.”
 
 “There are two owners and one identity:
 
-- Temporal owns the Workflow's execution progress and retry.
+- Temporal owns the Workflow's accepted input and execution progress.
 - Stripe owns whether the refund committed.
-- The Workflow run identity becomes the Stripe idempotency key.”
+- The Workflow identity becomes the Stripe idempotency key.”
 
 “That Workflow identity is also how the reloaded agent reconnects to existing
 work instead of starting another refund.”
 
-“Temporal does not promise exactly-once calls. We observed two calls. It gives
-the attempt a durable recovery point and stable identity so the retry can
-reconcile with the system that owns the effect instead of guessing from
-memory.”
+“Today I replaced the Worker before the Stripe call, so the visible payoff was
+form recovery. If the Worker instead disappears just after Stripe commits,
+Temporal may retry. It does not promise exactly-once calls. The stable identity
+lets that retry ask Stripe about the same refund instead of inventing another.”
 
 “That is the relationship between agent memory and durable execution: memory
 helps reasoning continue; Temporal helps the operation continue.”
@@ -239,10 +233,10 @@ result = await workflow.execute_activity(
 
 **Say**
 
-“The agent loop is ordinary Python. The irreversible operation crosses an
-Activity boundary. Temporal records the attempt, detects Worker loss, and
-retries. Inside the Activity, the Workflow run identity becomes the effect's
-idempotency key.”
+“The agent loop is ordinary Python. The submitted form is Workflow input, and
+the irreversible operation crosses this Activity boundary. Temporal records
+where the operation stands. Inside the Activity, the Workflow identity becomes
+the effect's idempotency key.”
 
 Do not explain the full agent loop, history replay algorithm, retry policy, or
 SDK syntax unless asked.
@@ -256,9 +250,9 @@ roles.
 
 Memory helps choose the next action.
 
-The effect owner knows what happened.
+Temporal remembers where execution stands.
 
-Execution state remembers what still needs to finish.”
+The effect owner knows whether the world changed.”
 
 “Do not ask agent memory to serve as proof of an external effect. Give the work
 a durable execution owner, and carry one identity across the systems that must
@@ -269,13 +263,13 @@ recover it.”
 | Control | Screen or action | Target time |
 | --- | --- | --- |
 | Enter | Empty naive agent | 0:45 |
-| Type refund request | Your message and the successful refund record remain visible | 1:45 |
-| Enter | Replacement Worker opens with no chat history | 2:05 |
-| Ask “Did I get my refund?” | New agent checks Stripe; `THE CUSTOMER RESTARTED THE WORK` appears | 2:45 |
+| Type refund request + Enter through 3 answers | Submitted form is visible; Stripe remains paid with no refund | 1:55 |
+| Enter | Replacement Worker opens; submitted form is gone | 2:15 |
+| Ask “What happened to my refund?” | Agent checks Stripe; `THE CUSTOMER MUST START OVER` appears | 2:50 |
 | Enter | Empty durable agent | 3:45 |
-| Type refund request | Effect accepted; completion uncertain | 4:30 |
+| Type refund request | Temporal shows the saved request and form; Stripe shows no refund | 4:30 |
 | Enter | Current Worker replaced; `WORKER GONE` | 5:15 |
-| Enter | Reloaded agent answers without customer follow-up | 6:15 |
+| Enter | Reloaded agent answers without form re-entry | 6:15 |
 | Enter | Final takeaway | 9:30 |
 
 ## If time slips
@@ -283,7 +277,7 @@ recover it.”
 - **Behind at 3:15:** Ask the audience question without waiting for answers.
 - **Behind at 6:30:** Say the two-owner explanation over the recovered frame.
 - **Behind at 8:30:** Skip the code excerpt entirely.
-- **Never cut:** `NO NEW CUSTOMER REQUEST`, “Your refund is complete,” or the
+- **Never cut:** `NO NEW FORM`, `NO RE-ENTRY`, “Your refund is complete,” or the
   final three lines.
 
 ## Practice sequence
@@ -300,7 +294,7 @@ recover it.”
 
 ## Rehearsal scorecard
 
-| Attempt | Mode | Total | Manual recovery by 3:15 | No-follow-up payoff | Owners named | No “exactly once” claim | Close from memory | Notes |
+| Attempt | Mode | Total | Start-over pain by 3:15 | No-re-entry payoff | Owners named | No “exactly once” claim | Close from memory | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 |  |  |  |  |  |  |  |  |
 | 2 |  |  |  |  |  |  |  |  |
@@ -310,11 +304,10 @@ recover it.”
 
 **Why not query Stripe before refunding?**
 
-You should query authoritative effect state when answering what happened; the
-naive demo now does. That still does not remember which interrupted application
-work is waiting for the answer. For issuing or retrying a refund, a separate
-read followed by a write can also race with another caller, so a stable
-idempotency key remains important.
+The naive replacement agent does query Stripe. Stripe correctly says the charge
+is paid and no refund exists. That query cannot reconstruct the completed return
+form because Stripe never received it. For a later retry, a separate read and
+write can also race, so a stable idempotency key remains important.
 
 **Could Stripe handle the retry without Temporal?**
 

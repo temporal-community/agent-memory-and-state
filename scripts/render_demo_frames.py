@@ -101,24 +101,25 @@ def _waiting_system_panel() -> Panel:
 
 
 def _render_naive_frames(output_dir: Path) -> None:
-    first_refund = {
-        "refund_id": "re_naive_4f31a3c1",
-        "order": "1234",
-        "amount": 8000,
-    }
     active_agent = {
         "user_message": "Please refund order 1234",
-        "context": {"order": "1234", "amount": 8000, "customer": "42"},
+        "context": {"order": "1234", "amount": 8000, "customer": "Nyghtowl"},
         "memory": {"tenure_days": 824, "prior_refunds": 1},
-        "_effect_unrecorded": True,
-        "note": "issued re_naive_4f31a3c1 before saving progress",
+        "_form_accepted": True,
+        "return_form": {
+            "item_opened": "Yes",
+            "damage": "Split seam",
+            "refund_destination": "Original card",
+        },
+        "note": "accepted in this Worker before Stripe was called",
     }
     status_agent = {
-        "user_message": "Did I get my refund?",
-        "context": {"order": "1234", "amount": 8000, "customer": "42"},
+        "user_message": "What happened to my refund?",
+        "context": {"order": "1234", "amount": 8000, "customer": "Nyghtowl"},
         "memory": {"tenure_days": 824, "prior_refunds": 1},
         "_status_checked": True,
-        "note": "new process queried the effect owner after the customer asked",
+        "_refund_missing": True,
+        "note": "new process checked Stripe after the customer asked",
     }
     frames = [
         (
@@ -127,19 +128,19 @@ def _render_naive_frames(output_dir: Path) -> None:
             "Naive demo — ready",
         ),
         (
-            "02-naive-refunded.html",
-            _demo_frame(active_agent, [first_refund], stage_mode=True),
-            "Naive demo — one refund",
+            "02-naive-form-submitted.html",
+            _demo_frame(active_agent, [], stage_mode=True),
+            "Naive demo — form submitted",
         ),
         (
             "03-naive-restarted.html",
-            _demo_frame({"_restarted": True}, [first_refund], stage_mode=True),
+            _demo_frame({"_restarted": True}, [], stage_mode=True),
             "Naive demo — replacement Worker",
         ),
         (
-            "04-naive-status-check.html",
-            _demo_frame(status_agent, [first_refund], stage_mode=True),
-            "Naive demo — manual status check",
+            "04-naive-start-over.html",
+            _demo_frame(status_agent, [], stage_mode=True),
+            "Naive demo — form must be re-entered",
         ),
     ]
     for filename, renderable, title in frames:
@@ -193,8 +194,8 @@ def _render_durable_frames(output_dir: Path) -> None:
                     lost_agent,
                     tui._stage_system_view(
                         status="RUNNING",
-                        refund={"calls": 1},
-                        pending_attempt=1,
+                        refund=None,
+                        pending_attempt=None,
                         refund_step_completed=False,
                     ),
                 ),
@@ -209,7 +210,7 @@ def _render_durable_frames(output_dir: Path) -> None:
                     recovered_agent,
                     tui._stage_system_view(
                         status="COMPLETED",
-                        refund={"calls": 2},
+                        refund={"calls": 1},
                         pending_attempt=None,
                         refund_step_completed=True,
                     ),

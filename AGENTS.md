@@ -19,15 +19,18 @@ model.
 
 ## Narrative invariants
 
-- The durable customer asks once. After the Worker is replaced, the reloaded
-  agent reconnects to the same Workflow and says, “Your refund is complete.”
-- The naive refund system retains an authoritative successful-refund record.
-  The replacement agent may query it and answer correctly after the customer
-  asks for status. Never imply that the effect fact disappeared or was
-  unavailable.
-- The naive failure is manual reconciliation: nothing durable remembers that
-  the interrupted customer request is still waiting for an answer. The customer
-  must return and trigger a new check.
+- Nyghtowl starts with a paid plush-python order. In Stripe test mode, create the
+  PaymentIntent before the first refund prompt so `PAID` is a real effect-owner
+  record, not stage decoration.
+- The naive Worker accepts a completed return form, then disappears before it
+  calls Stripe. Stripe correctly retains `PAID` and no refund. Never imply that
+  Stripe received or lost a request at this boundary.
+- A replacement agent may query Stripe and correctly report that no refund
+  exists, but Stripe cannot reconstruct form answers it never received. The
+  customer must enter those details again.
+- The durable form is recorded as Workflow input before the Worker is replaced.
+  After replacement, the reloaded agent reconnects to the same Workflow,
+  resumes without form re-entry, and says, “Your refund is complete.”
 - Do not claim Temporal prevents duplicate refunds by itself. Stripe's
   idempotency support makes the repeated effect call safe; Temporal remembers
   that an unresolved step needs recovery and drives it to completion.
@@ -42,9 +45,10 @@ model.
 - General-audience stage copy should use plain language such as “Worker gone,”
   “replacement Worker,” and “reloaded agent.” Keep SDK and event-history terms
   in the detailed `refund-demo watch` and inspection paths.
-- Do not make a duplicate refund the naive stage payoff. A competent replacement
-  agent can query the authoritative refund system. Contrast that customer-driven
-  reconciliation with Temporal resuming unfinished application work.
+- Do not make a duplicate refund or an uncertain Stripe effect the main stage
+  payoff. Contrast process-local accepted input with Temporal retaining and
+  resuming accepted application work. Keep the post-effect idempotency case in
+  the manual technical walkthrough.
 
 ## Implementation boundaries
 

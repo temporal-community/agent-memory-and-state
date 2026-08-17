@@ -14,6 +14,16 @@ class RefundRequest:
     amount_cents: int
     reason: str
     dry_run: bool
+    # Return details are application input, not facts Stripe can reconstruct
+    # from a paid charge. The guided stage stores them in Workflow input so a
+    # replacement Worker can continue without asking the customer again.
+    item_opened: str = "Yes"
+    damage: str = "Split seam"
+    refund_destination: str = "Original card"
+    # The stage runner pauses after Workflow input is recorded but before the
+    # agent loop or refund effect begins. This makes loss of an accepted request
+    # visible without pretending Stripe received a call that it did not.
+    hold_before_effect: bool = False
     # When set, hold the run open after the refund is issued (a durable wait) so
     # a Worker can be killed and restarted to show replay skipping a step that is
     # already recorded, rather than repeating it.

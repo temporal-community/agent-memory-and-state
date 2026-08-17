@@ -38,8 +38,8 @@ def test_stage_agent_returns_without_chat_history(tmp_path, monkeypatch) -> None
 
     panel = tui._stage_agent_panel("new-refund")
 
-    assert "How can I help you?" in panel.renderable.plain
-    assert "No conversation history" in panel.renderable.plain
+    assert "Welcome back, Nyghtowl" in panel.renderable.plain
+    assert "How can I help?" in panel.renderable.plain
 
 
 def test_reloaded_agent_answers_without_a_new_customer_request(
@@ -51,8 +51,9 @@ def test_reloaded_agent_answers_without_a_new_customer_request(
     panel = tui._stage_agent_panel("existing-refund", recovered=True)
 
     assert panel.title == "RELOADED AGENT"
-    assert "NO NEW CUSTOMER REQUEST" in panel.renderable.plain
-    assert "existing refund" in panel.renderable.plain
+    assert "NO NEW FORM" in panel.renderable.plain
+    assert "NO RE-ENTRY" in panel.renderable.plain
+    assert "Nyghtowl's submitted request" in panel.renderable.plain
     assert "Your refund is complete" in panel.renderable.plain
 
 
@@ -64,7 +65,7 @@ def test_stage_system_view_makes_the_payoff_glanceable() -> None:
         refund_step_completed=True,
     )
 
-    assert "Refund step completed after recovery" in panel.renderable.plain
+    assert "Submitted request completed after recovery" in panel.renderable.plain
     assert "2 CALLS  →  1 REFUND" in panel.renderable.plain
     assert "No duplicate" in panel.renderable.plain
 
@@ -80,37 +81,40 @@ def test_stage_system_view_explains_a_denied_live_request() -> None:
 
     assert "This request is complete" in panel.renderable.plain
     assert "No refund step was started" in panel.renderable.plain
-    assert "No refund was issued" in panel.renderable.plain
+    assert "Refund: none" in panel.renderable.plain
 
 
 def test_naive_restart_returns_to_a_blank_conversation() -> None:
-    frame = _demo_frame(
-        {"_restarted": True},
-        [{"refund_id": "r1", "order": "1234", "amount": 8000}],
-        stage_mode=True,
-    )
+    frame = _demo_frame({"_restarted": True}, [], stage_mode=True)
     output = io.StringIO()
     Console(file=output, width=128).print(frame)
     text = output.getvalue()
 
-    assert "How can I help you?" in text
+    assert "Welcome back, Nyghtowl" in text
     assert "REPLACEMENT WORKER" in text
     assert "A new session has started" in text
-    assert "previous conversation is gone" in text
+    assert "submitted return form is gone" in text
     assert "AFTER REPLACEMENT" in text
     assert "WHAT WENT WRONG" not in text
-    assert "Ask: Did I get my refund?" in text
+    assert "Ask: What happened to my refund?" in text
+    assert "Payment: PAID" in text
+    assert "Refund: none" in text
 
 
-def test_naive_first_refund_holds_on_the_agent_reply() -> None:
+def test_naive_form_is_accepted_before_stripe_is_called() -> None:
     frame = _demo_frame(
         {
             "user_message": "Please refund my plush python",
             "context": {"order": "1234", "amount": 8000, "customer": "42"},
             "memory": {"tenure_days": 824, "prior_refunds": 1},
-            "_effect_unrecorded": True,
+            "_form_accepted": True,
+            "return_form": {
+                "item_opened": "Yes",
+                "damage": "Split seam",
+                "refund_destination": "Original card",
+            },
         },
-        [{"refund_id": "r1", "order": "1234", "amount": 8000}],
+        [],
         stage_mode=True,
     )
     output = io.StringIO()
@@ -118,38 +122,40 @@ def test_naive_first_refund_holds_on_the_agent_reply() -> None:
     text = output.getvalue()
 
     assert "Please refund my plush python" in text
-    assert "Processing your refund" in text
-    assert "No confirmation reached this conversation" in text
-    assert "WHAT IS MISSING" in text
-    assert "refund system has the answer" in text
-    assert "customer is still waiting" in text
+    assert "RETURN FORM — SUBMITTED" in text
+    assert "Damage: Split seam" in text
+    assert "ACCEPTED, BUT NOT SAVED" in text
+    assert "form exists only in this Worker" in text
+    assert "Stripe still has a paid order and no refund request" in text
     assert "Press Enter to replace this Worker" in text
     assert "crash" not in text.lower()
 
 
-def test_naive_status_check_uses_effect_state_without_resuming_work() -> None:
+def test_naive_status_check_cannot_recover_form_from_stripe() -> None:
     frame = _demo_frame(
         {
             "user_message": "Did I get my refund?",
             "context": {"order": "1234", "amount": 8000, "customer": "42"},
             "memory": {"tenure_days": 824, "prior_refunds": 1},
             "_status_checked": True,
+            "_refund_missing": True,
         },
-        [{"refund_id": "r1", "order": "1234", "amount": 8000}],
+        [],
         stage_mode=True,
     )
     output = io.StringIO()
     Console(file=output, width=128).print(frame)
     text = output.getvalue()
 
-    assert "Let me check the refund system" in text
-    assert "your $80.00 refund succeeded" in text
-    assert "THE CUSTOMER RESTARTED THE WORK" in text
-    assert "did not pick up the interrupted request" in text
+    assert "Let me check Stripe" in text
+    assert "No refund request reached Stripe" in text
+    assert "Please enter the return details again" in text
+    assert "THE CUSTOMER MUST START OVER" in text
+    assert "cannot recover return details it never received" in text
     assert "DUPLICATE REFUND" not in text
 
 
-def test_naive_status_check_does_not_issue_another_refund() -> None:
+def test_naive_status_check_does_not_invent_a_refund() -> None:
     agent: dict = {}
     ledger: list = []
     _process_interactive(agent, ledger, "Please refund my plush python")
@@ -157,20 +163,21 @@ def test_naive_status_check_does_not_issue_another_refund() -> None:
     replacement_agent: dict = {"_restarted": True}
     _process_interactive(replacement_agent, ledger, "Did I get my refund?")
 
-    assert len(ledger) == 1
+    assert ledger == []
     assert replacement_agent["_status_checked"] is True
+    assert replacement_agent["_refund_missing"] is True
 
 
 def test_naive_stage_frame_does_not_stretch_to_terminal_height() -> None:
     frame = _demo_frame(
         {"_restarted": True},
-        [{"refund_id": "r1", "order": "1234", "amount": 8000}],
+        [],
         stage_mode=True,
     )
     output = io.StringIO()
     Console(file=output, width=80, height=40).print(frame)
 
-    assert len(output.getvalue().splitlines()) < 24
+    assert len(output.getvalue().splitlines()) <= 24
 
 
 def test_durable_stage_frame_does_not_stretch_to_terminal_height(

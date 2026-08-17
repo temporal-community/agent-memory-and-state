@@ -127,7 +127,13 @@ def _agent_panel(workflow_id: str) -> Panel:
     )
 
 
-def _stage_agent_panel(workflow_id: str, *, recovered: bool = False) -> Panel:
+def _stage_agent_panel(
+    workflow_id: str,
+    *,
+    recovered: bool = False,
+    form: dict[str, str] | None = None,
+    submitted: bool = False,
+) -> Panel:
     """Plain-language Worker view for a general-audience talk."""
 
     alive, _ = _worker_alive()
@@ -135,25 +141,36 @@ def _stage_agent_panel(workflow_id: str, *, recovered: bool = False) -> Panel:
     if not alive:
         body.append("WORKER GONE\n\n", style="bold red")
         body.append(
-            "Its current conversation and working view disappeared.",
+            "Its current conversation and working view disappeared.\n\n",
             style="red",
         )
+        body.append("The submitted form is no longer in this process.", style="red")
         return Panel(body, title="THIS WORKER", border_style="red")
 
     if recovered:
-        body.append("NO NEW CUSTOMER REQUEST\n\n", style="bold green")
+        body.append("NO NEW FORM\nNO RE-ENTRY\n\n", style="bold green")
         body.append(
-            "Temporal reconnected this agent to the existing refund.\n\n",
+            "Temporal reconnected this agent to Nyghtowl's submitted request.\n\n",
             style="green",
         )
         body.append("AGENT\n", style="bold cyan")
         body.append("  Your refund is complete.", style="bold")
         return Panel(body, title="RELOADED AGENT", border_style="green")
 
+    if submitted and form:
+        body.append("RETURN FORM — SUBMITTED\n", style="bold cyan")
+        body.append(f"  Opened: {form['item_opened']}\n")
+        body.append(f"  Damage: {form['damage']}\n")
+        body.append(f"  Refund to: {form['refund_destination']}\n\n")
+        body.append("AGENT\n", style="bold cyan")
+        body.append("  I have your return details.\n")
+        body.append("  Starting the refund...", style="yellow")
+        return Panel(body, title="THIS WORKER", border_style="cyan")
+
     view = _read_agent_view(workflow_id)
     if not view:
-        body.append("How can I help you?\n\n", style="bold cyan")
-        body.append("No conversation history.", style="dim")
+        body.append("Welcome back, Nyghtowl\n\n", style="bold cyan")
+        body.append("How can I help?", style="dim")
         return Panel(body, title="THIS WORKER", border_style="cyan")
 
     context = view.get("context") or {}
@@ -296,32 +313,39 @@ def _stage_system_view(
 
     body = Text()
     if status is None:
-        body.append("No request yet.\n\n", style="bold green")
-        body.append("Waiting for you to ask for a refund.", style="dim")
+        body.append("TEMPORAL\n", style="bold green")
+        body.append("  No refund request yet.\n\n", style="dim")
+        body.append("STRIPE\n", style="bold green")
+        body.append("  Payment: PAID\n")
+        body.append("  Refund: none\n", style="dim")
         return Panel(body, title="WHAT SURVIVES", border_style="green")
 
     if denied:
         body.append("TEMPORAL\n", style="bold green")
         body.append("  This request is complete.\n")
         body.append("  No refund step was started.\n\n")
-        body.append("REFUND SYSTEM\n", style="bold green")
-        body.append("  No refund was issued.\n", style="dim")
+        body.append("STRIPE\n", style="bold green")
+        body.append("  Payment: PAID\n")
+        body.append("  Refund: none\n", style="dim")
         return Panel(body, title="WHAT SURVIVES", border_style="green")
 
     body.append("TEMPORAL\n", style="bold green")
     if refund_step_completed:
-        body.append("  Refund step completed after recovery.\n")
+        body.append("  Submitted request completed after recovery.\n")
     elif refund is not None:
         body.append("  Refund step is still open.\n")
         body.append("  The Worker has not reported back.\n")
     else:
-        body.append("  Following the refund request.\n")
+        body.append("  Refund request saved.\n")
+        body.append("  Return details saved.\n")
+        body.append("  Waiting to continue.\n")
     if pending_attempt is not None:
         body.append(f"  Current attempt: {pending_attempt}\n")
 
-    body.append("\nREFUND SYSTEM\n", style="bold green")
+    body.append("\nSTRIPE\n", style="bold green")
+    body.append("  Payment: PAID\n")
     if refund is None:
-        body.append("  No refund yet.\n", style="dim")
+        body.append("  Refund: none yet.\n", style="dim")
     else:
         calls = int(refund.get("calls", 1))
         body.append("  Refund succeeded.\n")
@@ -428,7 +452,7 @@ def _stage_build(agent: Panel, system: Panel) -> Group:
     header = Text()
     header.append("Demo 2: The work keeps its place\n", style="bold")
     header.append(
-        "The Worker can disappear. The work and refund records survive.",
+        "The Worker can disappear. The submitted request keeps its place.",
         style="dim",
     )
     return Group(

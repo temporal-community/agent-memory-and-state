@@ -1,13 +1,9 @@
-"""Demo 1: authoritative effect state without coordinated execution state.
+"""Demo 1: accepted application input without durable execution state.
 
-The refund system retains the successful refund when the Worker disappears. A
-replacement agent can query that system and reconstruct what happened, but
-nothing remembers that the interrupted customer request still needs an answer.
-The customer has to return and start a new status check.
-
-This is the same refund task as Demo 2. The effect survives in both. Demo 2 also
-retains where the application work stands, so a reloaded agent can resume
-without another customer message.
+The Worker accepts a completed return form, then disappears before calling the
+refund system. Stripe correctly retains the paid charge and no refund. It cannot
+reconstruct form answers it never received. A replacement agent can check
+Stripe, but the customer must enter the return details again.
 """
 
 from __future__ import annotations
@@ -113,6 +109,19 @@ def _refund(args: argparse.Namespace) -> None:
         )
         return
 
+    _line(
+        "RETURN FORM",
+        f"opened={args.opened}; damage={args.damage}; refund_to={args.refund_to}",
+    )
+    if args.hold_before_effect:
+        _line(
+            "REQUEST BUFFER",
+            "accepted by this Worker; not durably saved; Stripe not called",
+        )
+        sys.stdout.flush()
+        while True:
+            time.sleep(60)
+
     _line("MODEL REASONING", "approve (amount within policy, clean history)")
     refund_id = _append_refund(order, amount)
     _line("THE SYSTEM", f"issued refund {refund_id} for order {order}")
@@ -172,18 +181,19 @@ def _process_interactive(
     agent["user_message"] = user_message
     agent["context"] = {"order": order, "amount": amount, "customer": customer}
     agent["memory"] = {"tenure_days": 824, "prior_refunds": 1}
-    existing = next((item for item in ledger if item["order"] == order), None)
-    if existing is not None:
+    normalized = user_message.lower()
+    if any(word in normalized for word in ("did i", "what happened", "status")):
         agent["_status_checked"] = True
-        agent["note"] = "queried the refund system after a new customer message"
+        agent["_refund_missing"] = not any(item["order"] == order for item in ledger)
+        agent["note"] = "checked Stripe after a new customer message"
         return
-    if agent.get("recorded"):
-        agent["note"] = "already refunded (it has that recorded), so it skips"
-        return
-    refund_id = f"re_naive_{uuid.uuid4().hex[:8]}"
-    ledger.append({"refund_id": refund_id, "order": order, "amount": amount})
-    agent["recorded"] = True
-    agent["note"] = f"issued {refund_id}, recorded 'done' in its own process"
+    agent["_form_accepted"] = True
+    agent["return_form"] = {
+        "item_opened": "Yes",
+        "damage": "Split seam",
+        "refund_destination": "Original card",
+    }
+    agent["note"] = "accepted the form in this process; Stripe not called"
 
 
 def _demo_frame(agent: dict, ledger: list, *, stage_mode: bool = False):
@@ -195,54 +205,58 @@ def _demo_frame(agent: dict, ledger: list, *, stage_mode: bool = False):
 
     left = Text()
     if "context" not in agent:
-        left.append("How can I help you?\n\n", style="bold cyan")
+        left.append("Welcome back, Nyghtowl\n\n", style="bold cyan")
         if agent.get("_restarted"):
             left.append(
                 "REPLACEMENT WORKER\n"
                 "A new session has started.\n"
-                "The previous conversation is gone.\n"
-                "It does not know that a reply is owed.",
+                "The submitted return form is gone.",
                 style="yellow",
             )
         else:
-            left.append(
-                "No conversation yet.\nAsk for a refund to begin.",
-                style="dim",
-            )
+            left.append("How can I help?", style="dim")
     elif agent.get("_status_checked"):
         context = agent.get("context") or {}
         amount = (context.get("amount") or 0) / 100
         left.append("YOU\n", style="bold yellow")
-        left.append(f"  {agent.get('user_message', 'Did I get my refund?')}\n\n")
+        left.append(f"  {agent.get('user_message', 'What happened to my refund?')}\n\n")
         left.append("AGENT\n", style="bold cyan")
-        left.append("  Let me check the refund system.\n\n")
-        left.append("ANSWER\n", style="bold green")
-        left.append(f"  Yes — your ${amount:.2f} refund succeeded.\n", style="bold")
+        left.append("  Let me check Stripe.\n\n")
+        if agent.get("_refund_missing", not ledger):
+            left.append("ANSWER\n", style="bold yellow")
+            left.append("  No refund request reached Stripe.\n", style="bold")
+            left.append("  Please enter the return details again.\n", style="yellow")
+        else:
+            left.append("ANSWER\n", style="bold green")
+            left.append(f"  Yes — your ${amount:.2f} refund succeeded.\n", style="bold")
     else:
         context = agent.get("context") or {}
-        memory = agent.get("memory") or {}
         amount = (context.get("amount") or 0) / 100
         left.append("YOU\n", style="bold yellow")
         left.append(f"  {agent.get('user_message', 'Please refund order 1234')}\n\n")
-        if agent.get("_effect_unrecorded"):
-            left.append("AGENT\n", style="bold cyan")
-            left.append("  Processing your refund...\n")
+        form = agent.get("return_form") or {}
+        if agent.get("_form_accepted"):
+            left.append("RETURN FORM — SUBMITTED\n", style="bold cyan")
+            left.append(f"  Opened: {form.get('item_opened', 'Yes')}\n")
+            left.append(f"  Damage: {form.get('damage', 'Split seam')}\n")
             left.append(
-                "  No confirmation reached this conversation.\n\n",
-                style="yellow",
+                f"  Refund to: {form.get('refund_destination', 'Original card')}\n\n"
             )
-        left.append("THE AGENT REMEMBERS\n", style="bold blue")
-        left.append(
-            f"  Customer {context.get('customer')}: "
-            f"{memory.get('tenure_days')} days, "
-            f"{memory.get('prior_refunds')} prior refund\n"
-            f"  Order {context.get('order')}: ${amount:.2f}\n\n"
-        )
-        left.append("DECISION\n", style="bold cyan")
-        left.append("  Approve the refund\n")
+            left.append("AGENT\n", style="bold cyan")
+            left.append("  I have your return details.\n")
+            left.append("  Starting the refund...\n", style="yellow")
+        else:
+            left.append(f"  Order {context.get('order')}: ${amount:.2f}\n")
 
     right = Text()
-    right.append(f"REFUND RECORDS: {len(ledger)}\n\n", style="bold")
+    right.append("LAST ORDER\n", style="bold")
+    right.append("  Plush python · $80.00\n\n")
+    right.append("STRIPE\n", style="bold green")
+    right.append("  Payment: PAID\n")
+    right.append(
+        "  Refund: none\n" if not ledger else "  Refund: SUCCEEDED\n",
+        style="dim" if not ledger else "green",
+    )
     for number, entry in enumerate(ledger, start=1):
         amount = entry["amount"] / 100
         right.append(f"  Refund {number}: order {entry['order']}, ${amount:.2f}\n")
@@ -251,31 +265,31 @@ def _demo_frame(agent: dict, ledger: list, *, stage_mode: bool = False):
     header_text = Text()
     header_text.append("Demo 1: The agent starts over\n", style="bold")
     header_text.append(
-        "The refund survives when the Worker is replaced. Its progress does not.",
+        "The Worker accepts a return form, then disappears before Stripe is called.",
         style="dim",
     )
     header = Panel(header_text, border_style="cyan")
-    if agent.get("_status_checked"):
+    if agent.get("_status_checked") and not ledger:
         explanation = (
-            "The agent found the refund because the customer asked again.\n"
-            "It did not pick up the interrupted request."
+            "Stripe can prove that no refund exists.\n"
+            "It cannot recover return details it never received."
         )
-        explanation_title = "THE CUSTOMER RESTARTED THE WORK"
-    elif agent.get("_effect_unrecorded") and ledger:
+        explanation_title = "THE CUSTOMER MUST START OVER"
+    elif agent.get("_form_accepted"):
         explanation = (
-            "The refund system has the answer.\n"
-            "Nothing remembers that this customer is still waiting for it."
+            "The form exists only in this Worker.\n"
+            "Stripe still has a paid order and no refund request."
         )
-        explanation_title = "WHAT IS MISSING"
-    elif agent.get("_restarted") and ledger:
+        explanation_title = "ACCEPTED, BUT NOT SAVED"
+    elif agent.get("_restarted"):
         explanation = (
-            "The refund record survived.\n"
-            "Nothing knows that a customer is still waiting."
+            "Stripe correctly says PAID with no refund.\n"
+            "The return form disappeared with the Worker."
         )
         explanation_title = "AFTER REPLACEMENT"
     else:
         explanation = (
-            "What happens if the refund succeeds, then this session disappears?"
+            "What happens after the form is submitted but before Stripe is called?"
         )
         explanation_title = "THE QUESTION"
     why = Panel(
@@ -283,12 +297,12 @@ def _demo_frame(agent: dict, ledger: list, *, stage_mode: bool = False):
         title=explanation_title,
         border_style="yellow",
     )
-    if stage_mode and agent.get("_effect_unrecorded"):
+    if stage_mode and agent.get("_form_accepted"):
         controls = "Press Enter to replace this Worker"
     elif stage_mode and agent.get("_status_checked"):
         controls = "Press Enter to compare with durable execution"
-    elif stage_mode and agent.get("_restarted") and ledger:
-        controls = "Ask: Did I get my refund?"
+    elif stage_mode and agent.get("_restarted"):
+        controls = "Ask: What happened to my refund?"
     elif stage_mode:
         controls = "Type your refund request at the you> prompt"
     else:
@@ -305,7 +319,7 @@ def _demo_frame(agent: dict, ledger: list, *, stage_mode: bool = False):
         ),
         Panel(
             right,
-            title="REFUND SYSTEM",
+            title="ORDER + STRIPE",
             border_style="green",
         ),
     )
@@ -361,7 +375,15 @@ def main() -> None:
     refund = commands.add_parser("refund", help="process one refund")
     refund.add_argument("--order", default="1234")
     refund.add_argument("--amount-cents", type=int, default=8000)
+    refund.add_argument("--opened", default="Yes")
+    refund.add_argument("--damage", default="Split seam")
+    refund.add_argument("--refund-to", default="Original card")
     boundary = refund.add_mutually_exclusive_group()
+    boundary.add_argument(
+        "--hold-before-effect",
+        action="store_true",
+        help="wait after accepting the form but before calling the refund system",
+    )
     boundary.add_argument(
         "--exit-after-effect",
         action="store_true",

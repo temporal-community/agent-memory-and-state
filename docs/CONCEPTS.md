@@ -66,24 +66,27 @@ cached copy does not replace the owner.
 
 ## The uncoordinated-progress trap
 
-The dangerous band between memory and state is process-local progress:
+The dangerous band between memory and state is process-local progress and
+accepted input:
 
-> I am waiting for the refund result so I can answer this customer.
+> I accepted the completed return form and still need to process it.
 
 A deploy, eviction, restart, OOM, or network partition can remove that progress
-at exactly the point where the application owes a response. The refund itself
-does not disappear. The effect owner still has an authoritative record.
+at exactly the point where the application owes work. The effect owner still
+has its authoritative record, but that record contains only what reached it.
 
-In the naive stage demo, the replacement agent can query that record after the
-customer asks, “Did I get my refund?” It answers correctly. This is effect state
-doing its job. The failure is that the customer had to return and initiate a new
-reconciliation because nothing remembered the interrupted application work.
+In the naive stage demo, the Worker accepts Nyghtowl's return form and
+disappears before calling Stripe. A replacement agent queries Stripe and
+correctly finds a paid order with no refund. This is effect state doing its job.
+The failure is that Stripe cannot reconstruct form answers it never received,
+so the customer must enter them again.
 
 A database-backed operation row, queue, scheduler, and reconciliation state
 machine could remember and resume that work. Those pieces are execution state.
-A lone "done" marker written after Stripe is insufficient because the process
-can still disappear between the effect and the marker. Temporal is the durable
-execution implementation used in this demo, not the only possible one.
+A lone "done" marker written after Stripe is also insufficient for the later
+uncertain-effect case because the process can disappear between the effect and
+the marker. Temporal is the durable execution implementation used in this demo,
+not the only possible one.
 
 ## Authority, not lifespan
 
@@ -103,10 +106,21 @@ configuration choice. Authority is the stable boundary:
 > When the agent's copy and the owner's record disagree, the owner's record
 > wins.
 
-## Two owners meet at the uncertain effect
+## Two owners meet before and after the effect
 
-The durable refund demo deliberately loses the Worker after Stripe accepts the
-refund but before the Activity reports completion.
+The guided stage deliberately loses the Worker before Stripe is called. At that
+moment:
+
+- Temporal owns the recorded return request and its execution position.
+- Stripe owns a paid charge and no refund.
+- The Worker process owns nothing authoritative.
+
+After the replacement Worker resumes, it reaches the refund Activity and Stripe
+records the refund. Both owners remain necessary.
+
+The manual technical demo exercises the later uncertain boundary: it loses the
+Worker after Stripe accepts the refund but before the Activity reports
+completion.
 
 At that moment:
 
@@ -128,17 +142,17 @@ to reconcile the retry with the effect it already owns.
 
 ## Why this changes the reloaded agent
 
-Stripe can answer whether the refund happened, and the naive replacement agent
+Stripe can answer whether a refund happened, and the naive replacement agent
 demonstrates that by querying it. Temporal owns a different problem: after the
-original Worker disappears, it retains the record that the logical refund is
-still running or has completed and that the application work should resume.
+original Worker disappears, it retains the submitted form and the record that
+the logical refund still needs to run.
 
 The application must reconnect the reloaded agent to the same Workflow ID. It
-can then surface the Workflow's current status or result instead of treating a
-repeated customer message as a new refund request. At the uncertain boundary,
-Temporal retries the unresolved Activity; Stripe reconciles the stable effect
-identity; and Temporal records the returned result. The agent can then answer,
-“Your refund is complete,” without the customer asking again.
+can then surface the Workflow's current status or result instead of asking the
+customer to enter the form again. At the later uncertain boundary, Temporal
+retries the unresolved Activity; Stripe reconciles the stable effect identity;
+and Temporal records the returned result. The agent can answer, “Your refund is
+complete,” without form re-entry.
 
 Temporal does not automatically inject that answer into a model or user
 interface. The application is responsible for retaining or deriving the

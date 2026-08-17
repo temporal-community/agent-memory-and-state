@@ -49,9 +49,20 @@ class RefundWorkflow:
         self.approval_note = ""
         self.released = False
         self.working_memory: list[dict] = []
+        self.stage_phase_value = "starting"
 
     @workflow.run
     async def run(self, request: RefundRequest) -> RefundResult:
+        if request.hold_before_effect:
+            # The request and form are already part of Workflow input. This
+            # stage-only wait proves that accepted application input survives a
+            # Worker replacement before any model or Stripe call begins.
+            self.stage_phase_value = "request_saved"
+            workflow.logger.info("EXECUTION STATE | phase=request_saved | DURABLE WAIT")
+            await workflow.wait_condition(lambda: self.released)
+            self.stage_phase_value = "working"
+            workflow.logger.info("EXECUTION STATE | phase=request_resumed")
+
         workflow.logger.info("EXECUTION STATE | phase=agent_loop_start")
 
         # OBSERVE, REASON, ACT: the loop runs until the agent decides.
@@ -180,3 +191,9 @@ class RefundWorkflow:
     def release(self) -> None:
         # EXECUTION STATE: lets a held run finish once the restart has been shown.
         self.released = True
+
+    @workflow.query
+    def stage_phase(self) -> str:
+        """Expose the deterministic stage pause without inspecting log timing."""
+
+        return self.stage_phase_value

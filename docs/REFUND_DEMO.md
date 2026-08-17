@@ -10,11 +10,11 @@ This guide exposes every process and recovery step separately. Use it for
 development, rehearsal, debugging, or a longer technical walkthrough.
 
 The guided stage makes the customer-facing contrast explicit. On the naive
-side, the refund record survives but the interrupted interaction does not. The
-customer returns and asks for status; a new agent queries the refund system and
-answers correctly. The durable side reloads against the same Workflow, resumes
-the existing refund, and answers “Your refund is complete” without a second
-customer message.
+side, a completed return form exists only in the Worker; the Worker disappears
+before calling Stripe, so a replacement correctly finds a paid charge and no
+refund but cannot recover the form. On the durable side, the form is Workflow
+input. A replacement Worker resumes it and answers “Your refund is complete”
+without form re-entry.
 
 ## Setup
 
@@ -44,6 +44,8 @@ The model and refund effect are independent:
   policy.
 - `--dry-run` writes to an offline Stripe-like ledger under `.demo-state`.
 - `--real` calls Stripe test mode and requires a `sk_test_` or `rk_test_` key.
+- The guided `--real` runner creates the paid test PaymentIntent before the
+  first refund prompt, then refunds that same payment in the durable half.
 - Live Stripe keys are rejected.
 
 | Variable | Purpose |
@@ -104,29 +106,37 @@ Run the naive two-pane agent:
 uv run naive-refund
 ```
 
-The left pane shows the process-local interaction. The right pane is the effect
-owner, a durable ledger of committed refunds.
+The left pane shows the process-local interaction. The right pane shows the paid
+order and Stripe's refund state.
 
-1. Press Enter or type `refund`. The agent decides and refunds. Its progress
-   record is separate from the effect.
-2. Type `restart`. The process view disappears while the ledger retains one
-   refund.
-3. Ask, `Did I get my refund?`
-4. The replacement agent checks the refund ledger and answers correctly.
+1. Press Enter or type `refund`. The agent accepts a prefilled return form in
+   process-local memory. Stripe has not been called.
+2. Type `restart`. The process view and form disappear. Stripe still says paid
+   with no refund.
+3. Ask, `What happened to my refund?`
+4. The replacement agent checks Stripe, answers correctly, and asks for the
+   return details again.
 
-This is manual reconciliation, not resumed work. The effect owner knows what
-happened, but it does not own the interrupted customer interaction. A custom
-database state machine and recovery job could supply that missing execution
-state; Temporal is the implementation shown on the durable side.
+This is accurate effect state without resumable application work. Stripe knows
+what reached Stripe, but it does not own return details it never received. A
+custom database state machine and recovery job could supply that missing
+execution state; Temporal is the implementation shown on the durable side.
 
 Use `reset` to start over and `quit` to exit.
 
-For a scripted process-restart version:
+For the same scripted pre-effect pause used by the stage runner:
 
 ```bash
 uv run naive-refund reset
+uv run naive-refund refund --order 1234 --hold-before-effect
+```
+
+The command prints `REQUEST BUFFER`, then waits until you replace it. No refund
+is written to the ledger. The older post-effect boundary is still available for
+technical comparison:
+
+```bash
 uv run naive-refund refund --order 1234 --exit-after-effect
-uv run naive-refund refund --order 1234
 uv run naive-refund ledger
 ```
 
