@@ -1,3 +1,4 @@
 include README.md
+include LICENSE
 include scripts/render_demo_frames.py
 recursive-include assets *.gif *.mp4 *.png

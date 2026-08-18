@@ -306,3 +306,7 @@ question.
 
 Thanks to Cecil for the review that shaped how this repository frames memory
 and state.
+
+## License
+
+Released under the [MIT License](LICENSE).
