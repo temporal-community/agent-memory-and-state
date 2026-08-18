@@ -117,6 +117,10 @@ order and Stripe's refund state.
 4. The replacement agent checks Stripe and answers correctly, but the customer
    must restart the return because there is no active execution to resume.
 
+With `refund-demo stage --real`, step 4 retrieves the test PaymentIntent and its
+refund list directly from Stripe. It does not create a refund. The only stage
+refund submission happens later in the Temporal-backed run.
+
 This is durable effect state beside lost working memory and lost application
 work. A persisted memory layer could restore the answers, but neither those
 facts nor Stripe's record would own the active loop position. A custom database

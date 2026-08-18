@@ -210,13 +210,17 @@ def _render_durable_frames(output_dir: Path) -> None:
             )
 
             tui._worker_alive = lambda: (True, 5252)
-            recovered_agent = tui._stage_agent_panel(WORKFLOW_ID, recovered=True)
+            recovered_agent = tui._stage_agent_panel(
+                WORKFLOW_ID,
+                recovered=True,
+                refund_status="succeeded",
+            )
             _export(
                 tui._stage_build(
                     recovered_agent,
                     tui._stage_system_view(
                         status="COMPLETED",
-                        refund={"calls": 1},
+                        refund={"calls": 1, "status": "succeeded"},
                         pending_attempt=None,
                         refund_step_completed=True,
                         loop_steps=DEMO_LOOP_STEPS,

@@ -282,6 +282,10 @@ def _demo_frame(agent: dict, ledger: list, *, stage_mode: bool = False):
 
     from refund_agent.tui import _compact_columns
 
+    refund_status = (
+        str(ledger[-1].get("status", "succeeded")).lower() if ledger else None
+    )
+
     left = Text()
     if "context" not in agent:
         left.append("Welcome back, Nyghtowl\n\n", style="bold cyan")
@@ -306,9 +310,14 @@ def _demo_frame(agent: dict, ledger: list, *, stage_mode: bool = False):
             left.append("  No refund request reached Stripe.\n", style="bold")
             left.append("  I lost your return answers.\n", style="yellow")
             left.append("  Please start the return again.\n", style="yellow")
-        else:
+        elif refund_status == "succeeded":
             left.append("ANSWER\n", style="bold green")
             left.append(f"  Yes — your ${amount:.2f} refund succeeded.\n", style="bold")
+        else:
+            left.append("ANSWER\n", style="bold yellow")
+            left.append("  Stripe has a refund record.\n", style="bold")
+            left.append(f"  Current status: {refund_status.upper()}.\n", style="yellow")
+            left.append("  It is not confirmed complete.\n", style="yellow")
     else:
         from refund_agent.tui import _append_loop_steps
 
@@ -329,15 +338,19 @@ def _demo_frame(agent: dict, ledger: list, *, stage_mode: bool = False):
     right.append("LAST ORDER\n", style="bold")
     right.append("  Plush python · $80.00\n\n")
     right.append("STRIPE\n", style="bold green")
-    right.append("  Payment: PAID\n")
-    right.append(
-        "  Refund: none\n" if not ledger else "  Refund: SUCCEEDED\n",
-        style="dim" if not ledger else "green",
-    )
+    right.append(f"  Payment: {agent.get('_payment_status', 'PAID')}\n")
+    if not ledger:
+        right.append("  Refund: none\n", style="dim")
+    else:
+        right.append(
+            f"  Refund: {refund_status.upper()}\n",
+            style="green" if refund_status == "succeeded" else "yellow",
+        )
     for number, entry in enumerate(ledger, start=1):
         amount = entry["amount"] / 100
         right.append(f"  Refund {number}: order {entry['order']}, ${amount:.2f}\n")
-        right.append("  Status: succeeded\n")
+        status = str(entry.get("status", "succeeded")).lower()
+        right.append(f"  Status: {status}\n")
 
     header_text = Text()
     header_text.append("Demo 1: The agent loop starts over\n", style="bold")

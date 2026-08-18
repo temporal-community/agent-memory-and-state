@@ -182,8 +182,9 @@ The guided runner:
    questions, then performs two lookups.
 3. Replaces the Worker after the agent chooses `issue refund` but before Stripe
    is called.
-4. Shows that the answers and active loop are gone while Stripe's correct
-   `PAID / no refund` record survives. The customer starts the return again.
+4. Checks the effect owner after replacement. In `--real` mode this retrieves
+   the PaymentIntent and refund list directly from Stripe; it does not submit a
+   refund. The customer starts the return again.
 5. Fast-forwards the same questions and lookups through a Temporal Workflow.
 6. Replaces the Worker at the same next action; Temporal still shows two saved
    answers, two completed lookups, and `Next action: issue refund`.
@@ -212,7 +213,8 @@ values in `.env`; exported shell variables take precedence.
 
 In `--real` mode, the runner creates and confirms Nyghtowl's Stripe test
 PaymentIntent before the first refund prompt. That is the `PAID` order visible
-in both demos; the durable half later refunds that same test payment. If a run
+in both demos. The naive half reads that PaymentIntent and confirms no refund
+reached Stripe; only the durable half later refunds the test payment. If a run
 ends before the refund, use `uv run refund-demo cleanup`.
 
 Test a live model against the offline ledger before combining it with `--real`.

@@ -48,7 +48,11 @@ def test_reloaded_agent_answers_without_a_new_customer_request(
     monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
     monkeypatch.setattr(tui, "_worker_alive", lambda: (True, 456))
 
-    panel = tui._stage_agent_panel("existing-refund", recovered=True)
+    panel = tui._stage_agent_panel(
+        "existing-refund",
+        recovered=True,
+        refund_status="succeeded",
+    )
 
     assert panel.title == "RELOADED AGENT"
     assert "NO REPEATED QUESTIONS" in panel.renderable.plain
@@ -60,7 +64,7 @@ def test_reloaded_agent_answers_without_a_new_customer_request(
 def test_stage_system_view_makes_the_payoff_glanceable() -> None:
     panel = tui._stage_system_view(
         status="COMPLETED",
-        refund={"calls": 2},
+        refund={"calls": 2, "status": "succeeded"},
         pending_attempt=None,
         refund_step_completed=True,
     )
@@ -68,6 +72,36 @@ def test_stage_system_view_makes_the_payoff_glanceable() -> None:
     assert "Agent loop completed after recovery" in panel.renderable.plain
     assert "2 CALLS  →  1 REFUND" in panel.renderable.plain
     assert "No duplicate" in panel.renderable.plain
+
+
+def test_reloaded_agent_does_not_call_a_pending_refund_complete(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
+    monkeypatch.setattr(tui, "_worker_alive", lambda: (True, 456))
+
+    panel = tui._stage_agent_panel(
+        "existing-refund",
+        recovered=True,
+        refund_status="pending",
+    )
+
+    assert "Stripe accepted the refund" in panel.renderable.plain
+    assert "status is still pending" in panel.renderable.plain
+    assert "refund is complete" not in panel.renderable.plain
+
+
+def test_stage_system_view_reports_pending_stripe_status() -> None:
+    panel = tui._stage_system_view(
+        status="COMPLETED",
+        refund={"calls": 1, "status": "pending"},
+        pending_attempt=None,
+        refund_step_completed=True,
+    )
+
+    assert "Refund status: PENDING" in panel.renderable.plain
+    assert "Stripe has not confirmed completion" in panel.renderable.plain
+    assert "Refund succeeded" not in panel.renderable.plain
 
 
 def test_stage_system_view_explains_a_denied_live_request() -> None:
@@ -187,10 +221,14 @@ def test_durable_stage_frame_does_not_stretch_to_terminal_height(
     monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
     monkeypatch.setattr(tui, "_worker_alive", lambda: (True, 456))
     frame = tui._stage_build(
-        tui._stage_agent_panel("existing-refund", recovered=True),
+        tui._stage_agent_panel(
+            "existing-refund",
+            recovered=True,
+            refund_status="succeeded",
+        ),
         tui._stage_system_view(
             status="COMPLETED",
-            refund={"calls": 2},
+            refund={"calls": 2, "status": "succeeded"},
             pending_attempt=None,
             refund_step_completed=True,
         ),

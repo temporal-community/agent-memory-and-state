@@ -121,6 +121,9 @@ position are gone; Stripe still shows its authoritative state. Ask, “What
 happened to my refund?” Pause on the answer that no request reached Stripe and
 the return must start again.
 
+In `--real` mode, that answer comes from retrieving the PaymentIntent and refund
+list from Stripe. This is a read only: the naive half never submits the refund.
+
 **Say**
 
 “Stripe's record is correct: no refund happened. But Stripe never owned the
@@ -196,7 +199,7 @@ complete.” Point right to Stripe's successful refund.
 “On the naive side, the working memory disappeared and Stripe only knew that no
 refund had arrived. Here the replacement Worker reconnects to the same
 autonomous work, continues at its next action, and can say, ‘Your refund is
-complete.’”
+complete’ only after Stripe returns `succeeded`.”
 
 **Checkpoint:** The recovered result should be visible by **6:30**.
 

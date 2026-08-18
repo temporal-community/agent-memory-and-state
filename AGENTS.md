@@ -22,6 +22,9 @@ model.
 - Nyghtowl starts with a paid plush-python order. In Stripe test mode, create the
   PaymentIntent before the first refund prompt so `PAID` is a real effect-owner
   record, not stage decoration.
+- In Stripe test mode, the replacement naive agent must retrieve the
+  PaymentIntent and refund list from Stripe. That read must never create a
+  refund. Only the Temporal-backed run submits the stage refund.
 - The naive agent visibly loops: ask whether the package was opened, observe the
   answer, ask what was damaged, observe the answer, look up the order and refund
   history, then choose `issue refund` as its next action. The Worker disappears
@@ -46,6 +49,9 @@ model.
 - A reloaded application must retain or derive the same Workflow ID and surface
   its status or result. Temporal does not automatically update an arbitrary
   chat session.
+- Say “refund complete” only when Stripe returned `succeeded`. Render `pending`
+  or any other status literally; an accepted API call is not proof of a
+  completed refund.
 - General-audience stage copy should use plain language such as “Worker gone,”
   “replacement Worker,” and “reloaded agent.” Keep SDK and event-history terms
   in the detailed `refund-demo watch` and inspection paths.

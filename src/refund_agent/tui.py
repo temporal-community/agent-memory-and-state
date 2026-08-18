@@ -131,6 +131,7 @@ def _stage_agent_panel(
     workflow_id: str,
     *,
     recovered: bool = False,
+    refund_status: str | None = None,
     loop_steps: list[dict[str, str]] | None = None,
     pending_question: dict[str, str] | None = None,
 ) -> Panel:
@@ -154,8 +155,22 @@ def _stage_agent_panel(
             style="green",
         )
         body.append("AGENT\n", style="bold cyan")
-        body.append("  Your refund is complete.", style="bold")
-        return Panel(body, title="RELOADED AGENT", border_style="green")
+        normalized_status = (refund_status or "unknown").lower()
+        if normalized_status == "succeeded":
+            body.append("  Your refund is complete.", style="bold")
+            border_style = "green"
+        elif normalized_status == "pending":
+            body.append("  Stripe accepted the refund.\n", style="bold yellow")
+            body.append("  Its status is still pending.", style="yellow")
+            border_style = "yellow"
+        else:
+            body.append(
+                "  I cannot confirm that the refund completed.\n",
+                style="bold red",
+            )
+            body.append(f"  Stripe status: {normalized_status.upper()}.", style="red")
+            border_style = "red"
+        return Panel(body, title="RELOADED AGENT", border_style=border_style)
 
     if loop_steps or pending_question:
         _append_loop_steps(body, loop_steps or [], pending_question=pending_question)
@@ -356,8 +371,13 @@ def _stage_system_view(
         return Panel(body, title="WHAT SURVIVES", border_style="green")
 
     body.append("TEMPORAL\n", style="bold green")
-    if refund_step_completed:
+    refund_status = (
+        str(refund.get("status") or "unknown").lower() if refund is not None else None
+    )
+    if refund_step_completed and refund_status == "succeeded":
         body.append("  Agent loop completed after recovery.\n")
+    elif refund_step_completed:
+        body.append("  Stripe response recorded after recovery.\n")
     elif refund is not None:
         body.append("  Refund step is still open.\n")
         body.append("  The Worker has not reported back.\n")
@@ -380,7 +400,7 @@ def _stage_system_view(
     body.append("  Payment: PAID\n")
     if refund is None:
         body.append("  Refund: none yet.\n", style="dim")
-    else:
+    elif refund_status == "succeeded":
         calls = int(refund.get("calls", 1))
         body.append("  Refund succeeded.\n")
         if calls > 1:
@@ -393,6 +413,9 @@ def _stage_system_view(
                     "  It succeeded before the Worker reported back.\n",
                     style="yellow",
                 )
+    else:
+        body.append(f"  Refund status: {refund_status.upper()}.\n", style="yellow")
+        body.append("  Stripe has not confirmed completion.\n", style="yellow")
     return Panel(body, title="WHAT SURVIVES", border_style="green")
 
 

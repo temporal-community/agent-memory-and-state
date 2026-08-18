@@ -1,5 +1,6 @@
 import asyncio
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -13,6 +14,7 @@ from refund_agent.stage import (
     _drive_naive_loop,
     _live_model_provider,
     _naive_ledger,
+    _read_real_stripe_state,
     _roles,
     _Services,
     _start_naive_at_boundary,
@@ -187,6 +189,49 @@ def test_stage_reads_scripted_naive_ledger(tmp_path) -> None:
     assert _naive_ledger(tmp_path) == [
         {"refund_id": "re_naive_1", "order": "1234", "amount": 8000}
     ]
+
+
+def test_real_naive_check_reads_stripe_without_creating_a_refund(
+    monkeypatch,
+) -> None:
+    calls: dict[str, object] = {}
+
+    class FakePaymentIntent:
+        @staticmethod
+        def retrieve(payment_intent_id: str):
+            calls["retrieve"] = payment_intent_id
+            return SimpleNamespace(status="succeeded")
+
+    class FakeRefund:
+        @staticmethod
+        def list(**kwargs):
+            calls["list"] = kwargs
+            return SimpleNamespace(data=[])
+
+        @staticmethod
+        def create(**_kwargs):
+            raise AssertionError("the naive status check must not submit a refund")
+
+    monkeypatch.setenv("STRIPE_API_KEY", "sk_test_demo")
+    monkeypatch.setattr("refund_agent.stage.stripe.PaymentIntent", FakePaymentIntent)
+    monkeypatch.setattr("refund_agent.stage.stripe.Refund", FakeRefund)
+
+    payment_status, refunds = _read_real_stripe_state("pi_demo")
+
+    assert payment_status == "PAID"
+    assert refunds == []
+    assert calls == {
+        "retrieve": "pi_demo",
+        "list": {"payment_intent": "pi_demo", "limit": 10},
+    }
+
+
+def test_stage_closing_does_not_call_a_pending_refund_complete() -> None:
+    panels = list(_closing("pending").renderables)
+    text = panels[0].renderable.plain
+
+    assert "Stripe status: PENDING" in text
+    assert "One submitted request, one refund" not in text
 
 
 def test_naive_worker_runs_questions_and_waits_before_refund(

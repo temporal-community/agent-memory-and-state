@@ -74,18 +74,29 @@ def _intro() -> Group:
     )
 
 
-def _closing() -> Group:
+def _closing(refund_status: str = "succeeded") -> Group:
     result = Text()
     result.append(
         "Naive: Stripe had no refund, and the agent loop started over.\n",
         style="bold red",
     )
-    result.append(
-        "Durable: the reloaded agent resumed at its next action.\n\n",
-        style="bold green",
-    )
-    result.append("No repeated questions.  ", style="bold green")
-    result.append("One submitted request, one refund.", style="green")
+    if refund_status.lower() == "succeeded":
+        result.append(
+            "Durable: the reloaded agent resumed at its next action.\n\n",
+            style="bold green",
+        )
+        result.append("No repeated questions.  ", style="bold green")
+        result.append("One submitted request, one refund.", style="green")
+    else:
+        result.append(
+            "Durable: the reloaded agent resumed the same request.\n\n",
+            style="bold yellow",
+        )
+        result.append("No repeated questions.  ", style="bold green")
+        result.append(
+            f"Stripe status: {refund_status.upper()} — not reported as complete.",
+            style="yellow",
+        )
     return Group(
         Panel(result, title="The difference", border_style="green"),
         Panel(
@@ -396,6 +407,29 @@ def _seed_test_payment(amount_cents: int) -> str:
     return str(intent.id)
 
 
+def _read_real_stripe_state(
+    payment_intent_id: str,
+) -> tuple[str, list[dict[str, object]]]:
+    """Read the paid order and its refunds directly from Stripe test mode."""
+
+    stripe.api_key = validate_stripe_key(os.getenv("STRIPE_API_KEY"), required=True)
+    stripe.max_network_retries = 0
+    intent = stripe.PaymentIntent.retrieve(payment_intent_id)
+    refunds = stripe.Refund.list(payment_intent=payment_intent_id, limit=10)
+    intent_status = str(intent.status).lower()
+    payment_status = "PAID" if intent_status == "succeeded" else intent_status.upper()
+    ledger = [
+        {
+            "refund_id": str(refund.id),
+            "order": "1234",
+            "amount": int(refund.amount),
+            "status": str(refund.status).lower(),
+        }
+        for refund in refunds.data
+    ]
+    return payment_status, ledger
+
+
 def _show(console: Console, renderable, cue: str) -> str:
     console.clear()
     console.print(renderable)
@@ -565,6 +599,7 @@ async def _durable_frame(
     workflow_id: str,
     *,
     recovered: bool = False,
+    refund_status: str | None = None,
     loop_steps: list[dict[str, str]] | None = None,
     pending_question: dict[str, str] | None = None,
 ):
@@ -575,6 +610,7 @@ async def _durable_frame(
     agent = tui._stage_agent_panel(
         workflow_id,
         recovered=recovered,
+        refund_status=refund_status,
         loop_steps=loop_steps,
         pending_question=pending_question,
     )
@@ -695,6 +731,21 @@ async def run(
             "The replacement Worker has no active loop. Ask what happened",
             default="What happened to my refund?",
         )
+        naive_payment_status = "PAID"
+        naive_refunds = _naive_ledger(stage_state)
+        if real:
+            with console.status(
+                "Checking the payment and refund directly in Stripe..."
+            ):
+                try:
+                    naive_payment_status, naive_refunds = await asyncio.to_thread(
+                        _read_real_stripe_state,
+                        payment_intent,
+                    )
+                except stripe.StripeError as error:
+                    raise RuntimeError(
+                        f"Stripe could not verify the naive outcome: {error}"
+                    ) from error
         recovered_naive = {
             "context": {
                 "order": "1234",
@@ -702,7 +753,8 @@ async def run(
                 "customer": "Nyghtowl",
             },
             "_status_checked": True,
-            "_refund_missing": True,
+            "_refund_missing": not naive_refunds,
+            "_payment_status": naive_payment_status,
             "note": "new process checked Stripe after the customer asked",
             "user_message": status_question,
         }
@@ -710,7 +762,7 @@ async def run(
             console,
             _demo_frame(
                 recovered_naive,
-                [],
+                naive_refunds,
                 stage_mode=True,
             ),
             "Press Enter to run the same failure with durable execution",
@@ -820,12 +872,13 @@ async def run(
                 client,
                 workflow_id,
                 recovered=True,
+                refund_status=result.status,
                 loop_steps=durable_steps,
             ),
             "Press Enter for the takeaway",
         )
         console.clear()
-        console.print(_closing())
+        console.print(_closing(result.status))
         console.print(f"\nStage logs: {stage_state}", style="dim")
     finally:
         _stop_naive_worker(naive_worker)
