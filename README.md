@@ -1,13 +1,14 @@
+# Agent Memory and State
+
 <div align="center">
 
+[![MIT License](https://img.shields.io/badge/license-MIT-2ea44f.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.11%2B-3776ab?logo=python&logoColor=white)](pyproject.toml)
 [![Temporal Python SDK](https://img.shields.io/badge/Temporal_Python_SDK-1.30%2B-635bff)](https://github.com/temporalio/sdk-python)
 [![Stripe](https://img.shields.io/badge/Stripe-test_mode_only-635bff?logo=stripe&logoColor=white)](https://docs.stripe.com/test-mode)
 [![uv](https://img.shields.io/badge/run_with-uv-de5fe9)](https://docs.astral.sh/uv/)
 
 </div>
-
-# Agent Memory and State
 
 **A visual Python demo showing how an agent can know what to do and still lose
 the customer's in-flight work.**
