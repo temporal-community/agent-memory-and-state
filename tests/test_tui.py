@@ -135,6 +135,20 @@ def test_naive_restart_returns_to_a_blank_conversation() -> None:
     assert "Refund: none" in text
 
 
+def test_naive_worker_gone_is_a_visible_stage_beat() -> None:
+    frame = _demo_frame({"_worker_gone": True}, [], stage_mode=True)
+    output = io.StringIO()
+    Console(file=output, width=128).print(frame)
+    text = output.getvalue()
+
+    assert "WORKER GONE" in text
+    assert "current conversation and working view disappeared" in text
+    assert "live copy of the agent loop is gone" in text
+    assert "Payment: PAID" in text
+    assert "Refund: none" in text
+    assert "Press Enter to start a replacement Worker" in text
+
+
 def test_naive_agent_loop_reaches_the_refund_before_stripe_is_called() -> None:
     frame = _demo_frame(
         {

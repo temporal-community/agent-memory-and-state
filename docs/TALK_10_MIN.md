@@ -116,10 +116,10 @@ called.”
 
 **Action**
 
-The screen reloads with `REPLACEMENT WORKER`. The process-local answers and loop
-position are gone; Stripe still shows its authoritative state. Ask, “What
-happened to my refund?” Pause on the answer that no request reached Stripe and
-the return must start again.
+Hold the `WORKER GONE` frame for three seconds. The process-local answers and
+loop position are gone; Stripe still shows its authoritative state. Press Enter
+to start the `REPLACEMENT WORKER`, then ask, “What happened to my refund?” Pause
+on the answer that no request reached Stripe and the return must start again.
 
 In `--real` mode, that answer comes from retrieving the PaymentIntent and refund
 list from Stripe. This is a read only: the naive half never submits the refund.
@@ -274,6 +274,7 @@ recover it.”
 | --- | --- | --- |
 | Enter | Empty naive agent | 0:45 |
 | Type refund request + Enter through 2 answers | Four observations and `Next: issue refund` are visible | 1:55 |
+| Enter | Naive Worker replaced; `WORKER GONE` | 2:10 |
 | Enter | Replacement Worker opens; memory returns but loop position is gone | 2:15 |
 | Ask “What happened to my refund?” | Agent checks Stripe; `THE CUSTOMER RESTARTS THE LOOP` appears | 2:50 |
 | Enter | Empty durable agent | 3:45 |

@@ -721,6 +721,15 @@ async def run(
         )
         _stop_naive_worker(naive_worker)
         naive_worker = None
+        _show(
+            console,
+            _demo_frame(
+                {"_worker_gone": True},
+                [],
+                stage_mode=True,
+            ),
+            "Press Enter to start a replacement Worker",
+        )
         status_question = _ask_for_refund(
             console,
             _demo_frame(

@@ -181,7 +181,7 @@ The guided runner:
 2. Lets you ask for a refund while the naive agent chooses and asks two
    questions, then performs two lookups.
 3. Replaces the Worker after the agent chooses `issue refund` but before Stripe
-   is called.
+   is called, then holds on a visible `WORKER GONE` frame.
 4. Checks the effect owner after replacement. In `--real` mode this retrieves
    the PaymentIntent and refund list directly from Stripe; it does not submit a
    refund. The customer starts the return again.

@@ -288,7 +288,15 @@ def _demo_frame(agent: dict, ledger: list, *, stage_mode: bool = False):
 
     left = Text()
     if "context" not in agent:
-        left.append("Welcome back, Nyghtowl\n\n", style="bold cyan")
+        if agent.get("_worker_gone"):
+            left.append("WORKER GONE\n\n", style="bold red")
+            left.append(
+                "Its current conversation and working view disappeared.\n\n"
+                "Its live copy of the agent loop is gone.",
+                style="red",
+            )
+        else:
+            left.append("Welcome back, Nyghtowl\n\n", style="bold cyan")
         if agent.get("_restarted"):
             left.append(
                 "REPLACEMENT WORKER\n"
@@ -296,7 +304,7 @@ def _demo_frame(agent: dict, ledger: list, *, stage_mode: bool = False):
                 "The answers and loop position are gone.",
                 style="yellow",
             )
-        else:
+        elif not agent.get("_worker_gone"):
             left.append("How can I help?", style="dim")
     elif agent.get("_status_checked"):
         context = agent.get("context") or {}
@@ -359,7 +367,13 @@ def _demo_frame(agent: dict, ledger: list, *, stage_mode: bool = False):
         style="dim",
     )
     header = Panel(header_text, border_style="cyan")
-    if agent.get("_status_checked") and not ledger:
+    if agent.get("_worker_gone"):
+        explanation = (
+            "The process-local answers and next action disappeared.\n"
+            "Stripe still correctly says PAID with no refund."
+        )
+        explanation_title = "WORKER GONE"
+    elif agent.get("_status_checked") and not ledger:
         explanation = (
             "Stripe kept the payment record. The Worker held the answers and\n"
             "the loop position. Both disappeared with it."
@@ -393,6 +407,8 @@ def _demo_frame(agent: dict, ledger: list, *, stage_mode: bool = False):
         controls = "Press Enter to replace this Worker"
     elif stage_mode and agent.get("_status_checked"):
         controls = "Press Enter to compare with durable execution"
+    elif stage_mode and agent.get("_worker_gone"):
+        controls = "Press Enter to start a replacement Worker"
     elif stage_mode and agent.get("_restarted"):
         controls = "Ask: What happened to my refund?"
     elif stage_mode:
@@ -406,8 +422,8 @@ def _demo_frame(agent: dict, ledger: list, *, stage_mode: bool = False):
     panes = _compact_columns(
         Panel(
             left,
-            title="THIS AGENT SESSION",
-            border_style="cyan",
+            title="THIS WORKER" if agent.get("_worker_gone") else "THIS AGENT SESSION",
+            border_style="red" if agent.get("_worker_gone") else "cyan",
         ),
         Panel(
             right,
