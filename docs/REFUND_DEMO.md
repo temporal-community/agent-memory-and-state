@@ -210,6 +210,21 @@ uv run refund-demo stop demo-refund
 
 This is the mechanical core of the durability payoff.
 
+The easiest single-terminal version is:
+
+```bash
+uv run refund-demo stage --real --simulate-stripe-retry
+```
+
+The runner waits until Stripe accepts attempt 1, kills the Worker before the
+Activity reports completion, and pauses with the retry unresolved. Temporal's
+Event History compacts the intermediate failure: after recovery, the
+`ActivityTaskStarted` event carries `attempt: 2` and a `lastFailure` heartbeat
+timeout rather than a separate `ActivityTaskTimedOut` event. Press Enter to
+start the replacement Worker; attempt 2 uses the same Stripe idempotency key and
+returns the same refund. Run the same command without `--real` to rehearse
+against the offline ledger.
+
 The failure lands after Stripe accepts the refund but before the Activity can
 report completion. The process cannot know whether money moved. Temporal owns
 the attempt, Stripe owns the effect, and the retry uses one idempotency key.

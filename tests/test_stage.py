@@ -68,6 +68,14 @@ def test_stage_command_defaults_to_offline_deterministic_mode() -> None:
     assert args.real is False
     assert args.real_model is False
     assert args.model_provider is None
+    assert args.simulate_stripe_retry is False
+
+
+def test_stage_can_enable_the_stripe_retry_simulation() -> None:
+    args = _parser().parse_args(["stage", "--real", "--simulate-stripe-retry"])
+
+    assert args.real is True
+    assert args.simulate_stripe_retry is True
 
 
 def test_real_model_mode_requires_an_api_key(monkeypatch) -> None:
@@ -315,6 +323,23 @@ def test_stage_cleanup_removes_only_its_worker_pid(tmp_path) -> None:
     services.close()
 
     assert not pid_path.exists()
+
+
+def test_stage_worker_restart_window_is_opt_in(tmp_path) -> None:
+    normal = _Services(
+        base_state=tmp_path,
+        stage_state=tmp_path / "normal",
+        task_queue="normal",
+    )
+    retry_demo = _Services(
+        base_state=tmp_path,
+        stage_state=tmp_path / "retry",
+        task_queue="retry",
+        effect_restart_window_seconds=30,
+    )
+
+    assert normal.effect_restart_window_seconds == 0
+    assert retry_demo.effect_restart_window_seconds == 30
 
 
 def test_stage_cleanup_preserves_a_different_worker_pid(tmp_path) -> None:

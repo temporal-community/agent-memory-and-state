@@ -425,6 +425,7 @@ async def _stage(args: argparse.Namespace) -> None:
             real_model=args.real_model,
             amount_cents=8000,
             model_provider=args.model_provider,
+            simulate_stripe_retry=args.simulate_stripe_retry,
         )
     except RuntimeError as error:
         print(f"STAGE | {error}")
@@ -549,6 +550,11 @@ def _parser() -> argparse.ArgumentParser:
         "--model-provider",
         choices=("anthropic", "openai"),
         help="live provider; inferred only when exactly one provider key is set",
+    )
+    stage.add_argument(
+        "--simulate-stripe-retry",
+        action="store_true",
+        help="interrupt after Stripe accepts attempt 1, then retry after replacement",
     )
 
     seed = commands.add_parser(

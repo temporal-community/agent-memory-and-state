@@ -271,6 +271,12 @@ recover it.”
 
 ## Stage controls
 
+For the optional uncertain-effect ending, start with `uv run refund-demo stage
+--real --simulate-stripe-retry`. After Stripe accepts attempt 1, the runner
+removes the Worker and waits with the Activity unresolved. Press Enter once to
+start the replacement Worker. Temporal's Event History then exposes
+`ActivityTaskStarted` attempt 2 with the heartbeat timeout in `lastFailure`.
+
 | Control | Screen or action | Target time |
 | --- | --- | --- |
 | Enter | Empty naive agent | 0:45 |

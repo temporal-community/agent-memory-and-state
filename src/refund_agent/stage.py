@@ -41,6 +41,8 @@ _SERVER_START_TIMEOUT_SECONDS = 20
 _WORKER_START_TIMEOUT_SECONDS = 15
 _DEMO_TIMEOUT_SECONDS = 90
 _DEFAULT_REFUND_REQUEST = "Please refund order 1234."
+_SIMULATED_RETRY_WINDOW_SECONDS = 30
+_SIMULATED_RETRY_DETECTION_SECONDS = 4
 
 
 def _roles() -> Panel:
@@ -129,10 +131,18 @@ def _stop_process(process: subprocess.Popen[str] | None, *, hard: bool = False) 
 
 
 class _Services:
-    def __init__(self, *, base_state: Path, stage_state: Path, task_queue: str) -> None:
+    def __init__(
+        self,
+        *,
+        base_state: Path,
+        stage_state: Path,
+        task_queue: str,
+        effect_restart_window_seconds: float = 0,
+    ) -> None:
         self.base_state = base_state
         self.stage_state = stage_state
         self.task_queue = task_queue
+        self.effect_restart_window_seconds = effect_restart_window_seconds
         self.server: subprocess.Popen[str] | None = None
         self.worker: subprocess.Popen[str] | None = None
         self.server_log_path = stage_state / "temporal.log"
@@ -202,9 +212,9 @@ class _Services:
         environment = os.environ.copy()
         environment["DEMO_STATE_DIR"] = str(self.stage_state)
         environment["TEMPORAL_TASK_QUEUE"] = self.task_queue
-        # The guided story now replaces the Worker before Stripe is called. The
-        # separate manual demo still covers the uncertain post-effect boundary.
-        environment["EFFECT_RESTART_WINDOW_SECONDS"] = "0"
+        environment["EFFECT_RESTART_WINDOW_SECONDS"] = str(
+            self.effect_restart_window_seconds
+        )
         self.worker = subprocess.Popen(
             [sys.executable, "-m", "refund_agent.worker"],
             env=environment,
@@ -696,6 +706,7 @@ async def run(
     real_model: bool,
     amount_cents: int,
     model_provider: str | None = None,
+    simulate_stripe_retry: bool = False,
 ) -> None:
     """Run both demos from one guided terminal."""
 
@@ -715,6 +726,9 @@ async def run(
         base_state=base_state,
         stage_state=stage_state,
         task_queue=queue,
+        effect_restart_window_seconds=(
+            _SIMULATED_RETRY_WINDOW_SECONDS if simulate_stripe_retry else 0
+        ),
     )
     previous_state_dir = os.environ.get("DEMO_STATE_DIR")
     os.environ["DEMO_STATE_DIR"] = str(stage_state)
@@ -891,14 +905,49 @@ async def run(
             "Press Enter to reload the agent with a replacement Worker",
         )
 
-        with console.status(
-            "Resuming at the saved next action; no repeated questions..."
-        ):
-            await services.start_worker()
-            await handle.signal(RefundWorkflow.release)
-            result = await asyncio.wait_for(
-                handle.result(), timeout=_DEMO_TIMEOUT_SECONDS
+        if simulate_stripe_retry:
+            with console.status(
+                "Calling Stripe, then interrupting before Temporal records it..."
+            ):
+                await services.start_worker()
+                await handle.signal(RefundWorkflow.release)
+                effect_outcome = await _wait_for_first_effect(
+                    handle,
+                    workflow_id,
+                    timeout=_DEMO_TIMEOUT_SECONDS,
+                )
+                if effect_outcome != "effect":
+                    raise RuntimeError(
+                        "the retry simulation ended before Stripe accepted the refund"
+                    )
+                services.kill_worker()
+                await asyncio.sleep(_SIMULATED_RETRY_DETECTION_SECONDS)
+            _show(
+                console,
+                await _durable_frame(
+                    client,
+                    workflow_id,
+                    loop_steps=durable_steps,
+                ),
+                "Stripe accepted attempt 1, but the Worker disappeared before "
+                "reporting it. Press Enter to start a replacement Worker",
             )
+            with console.status(
+                "Replacement Worker running Temporal's retry with the same key..."
+            ):
+                await services.start_worker()
+                result = await asyncio.wait_for(
+                    handle.result(), timeout=_DEMO_TIMEOUT_SECONDS
+                )
+        else:
+            with console.status(
+                "Resuming at the saved next action; no repeated questions..."
+            ):
+                await services.start_worker()
+                await handle.signal(RefundWorkflow.release)
+                result = await asyncio.wait_for(
+                    handle.result(), timeout=_DEMO_TIMEOUT_SECONDS
+                )
         if result.status == "denied":
             completed = True
             _show(

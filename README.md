@@ -202,6 +202,7 @@ shuts down only the processes it started.
 | --- | --- | --- |
 | `uv run refund-demo stage` | Deterministic | Offline ledger |
 | `uv run refund-demo stage --real` | Deterministic | Stripe test mode |
+| `uv run refund-demo stage --real --simulate-stripe-retry` | Deterministic | Stripe test mode with a visible Activity retry |
 | `uv run refund-demo stage --real-model --model-provider anthropic` | Claude | Offline ledger |
 | `uv run refund-demo stage --real --real-model --model-provider anthropic` | Claude | Stripe test mode |
 | `uv run refund-demo stage --real-model --model-provider openai` | OpenAI | Offline ledger |
@@ -224,6 +225,15 @@ should refer to order 1234 or the plush python. Its policy record explicitly say
 that this low-value damaged item does not require a physical return. If a live
 model denies a conflicting request, the stage shows its rationale and the fact
 that no refund was issued instead of exiting on an empty screen.
+
+`--simulate-stripe-retry` adds a second failure beat to Demo 2. After Stripe
+accepts the first refund call, the runner kills the Worker before the Activity
+can report completion. Temporal keeps the Activity open at attempt 2 and waits.
+Press Enter to start the replacement Worker; attempt 2 reuses the same Stripe
+idempotency key, returns the original refund, and finishes as `2 CALLS → 1
+REFUND`. In Event History, the attempt-2 `ActivityTaskStarted` event carries the
+heartbeat timeout as `lastFailure`; intermediate retry failures are compacted.
+The flag also works without `--real` for an offline rehearsal.
 
 ## Read the payoff
 
