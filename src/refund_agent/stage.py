@@ -67,8 +67,7 @@ def _intro() -> Group:
         "customer submitted.\n\n"
     )
     thesis.append(
-        "We will interrupt the same observe–reason–act loop before Stripe "
-        "receives the refund request, then add a durable owner for its progress."
+        "We'll interrupt the agent before Stripe, then make its progress durable."
     )
     return Group(
         Panel(thesis, title="Agent memory and state", border_style="cyan"),
