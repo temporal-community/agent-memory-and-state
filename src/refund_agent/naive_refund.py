@@ -16,6 +16,10 @@ import time
 import uuid
 from pathlib import Path
 
+import stripe
+
+from refund_agent.settings import load_env_file, validate_stripe_key
+
 # Color only when writing to a real terminal, so piped output stays clean.
 _COLOR = sys.stdout.isatty()
 _CODES = {"bold": "1", "dim": "2", "system": "32", "danger": "31"}
@@ -58,6 +62,29 @@ def _read_ledger() -> dict:
     if not path.exists():
         return {"refunds": []}
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _read_real_stripe_state(
+    payment_intent_id: str,
+) -> tuple[str, list[dict[str, object]]]:
+    """Read effect state from Stripe without creating a refund."""
+
+    stripe.api_key = validate_stripe_key(os.getenv("STRIPE_API_KEY"), required=True)
+    stripe.max_network_retries = 0
+    intent = stripe.PaymentIntent.retrieve(payment_intent_id)
+    refunds = stripe.Refund.list(payment_intent=payment_intent_id, limit=10)
+    intent_status = str(intent.status).lower()
+    payment_status = "PAID" if intent_status == "succeeded" else intent_status.upper()
+    ledger = [
+        {
+            "refund_id": str(refund.id),
+            "order": "1234",
+            "amount": int(refund.amount),
+            "status": str(refund.status).lower(),
+        }
+        for refund in refunds.data
+    ]
+    return payment_status, ledger
 
 
 def _append_refund(order: str, amount_cents: int) -> str:
@@ -137,6 +164,57 @@ def _run_interactive_agent_loop() -> None:
             "result": "issue refund",
         }
     )
+
+
+def _replacement_status(args: argparse.Namespace) -> None:
+    """Run the replacement agent's effect check in a new process."""
+
+    _state_dir().mkdir(parents=True, exist_ok=True)
+    question = sys.stdin.readline()
+    if not question:
+        raise RuntimeError("customer input closed before the replacement status check")
+
+    try:
+        if args.real:
+            payment_status, refunds = _read_real_stripe_state(args.payment_intent)
+        else:
+            payment_status = "PAID"
+            refunds = [
+                {
+                    "refund_id": str(refund["refund_id"]),
+                    "order": str(refund["order_id"]),
+                    "amount": int(refund["amount_cents"]),
+                    "status": "succeeded",
+                }
+                for refund in _read_ledger().get("refunds", [])
+            ]
+    except stripe.StripeError as error:
+        message = getattr(error, "user_message", None) or str(error)
+        _line("AGENT ERROR", json.dumps({"message": message}))
+        return
+
+    agent = {
+        "context": {
+            "order": args.order,
+            "amount": args.amount_cents,
+            "customer": "Nyghtowl",
+        },
+        "_status_checked": True,
+        "_refund_missing": not refunds,
+        "_payment_status": payment_status,
+        "_replacement_worker": True,
+        "_worker_pid": os.getpid(),
+        "note": "replacement process checked Stripe after the customer asked",
+        "user_message": question.strip(),
+    }
+    _line(
+        "AGENT RESULT",
+        json.dumps({"agent": agent, "refunds": refunds}, sort_keys=True),
+    )
+
+    if args.hold_after_status:
+        while True:
+            time.sleep(60)
 
 
 def _refund(args: argparse.Namespace) -> None:
@@ -419,11 +497,20 @@ def _demo_frame(agent: dict, ledger: list, *, stage_mode: bool = False):
         controls,
         border_style="dim",
     )
+    if agent.get("_worker_gone"):
+        agent_panel_title = "THIS WORKER"
+        agent_border_style = "red"
+    elif agent.get("_replacement_worker") or agent.get("_restarted"):
+        agent_panel_title = "REPLACEMENT WORKER"
+        agent_border_style = "cyan"
+    else:
+        agent_panel_title = "THIS AGENT SESSION"
+        agent_border_style = "cyan"
     panes = _compact_columns(
         Panel(
             left,
-            title="THIS WORKER" if agent.get("_worker_gone") else "THIS AGENT SESSION",
-            border_style="red" if agent.get("_worker_gone") else "cyan",
+            title=agent_panel_title,
+            border_style=agent_border_style,
         ),
         Panel(
             right,
@@ -474,6 +561,7 @@ def _run_interactive() -> None:
 
 
 def main() -> None:
+    load_env_file()
     parser = argparse.ArgumentParser(
         prog="naive-refund",
         description="A refund agent with no durable execution (Demo 1)",
@@ -513,6 +601,16 @@ def main() -> None:
 
     commands.add_parser("reset", help="clear the ledger and completion records")
 
+    replacement = commands.add_parser(
+        "replacement-status",
+        help="check effect state from a new naive-agent process",
+    )
+    replacement.add_argument("--order", default="1234")
+    replacement.add_argument("--amount-cents", type=int, default=8000)
+    replacement.add_argument("--payment-intent", default="pi_dry_run_demo")
+    replacement.add_argument("--real", action="store_true")
+    replacement.add_argument("--hold-after-status", action="store_true")
+
     args = parser.parse_args()
     if args.command == "refund":
         _refund(args)
@@ -520,6 +618,8 @@ def main() -> None:
         _ledger(args)
     elif args.command == "reset":
         _reset(args)
+    elif args.command == "replacement-status":
+        _replacement_status(args)
     else:
         # No subcommand: launch the interactive two-pane demo.
         _run_interactive()

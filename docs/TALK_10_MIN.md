@@ -118,8 +118,9 @@ called.”
 
 Hold the `WORKER GONE` frame for three seconds. The process-local answers and
 loop position are gone; Stripe still shows its authoritative state. Press Enter
-to start the `REPLACEMENT WORKER`, then ask, “What happened to my refund?” Pause
-on the answer that no request reached Stripe and the return must start again.
+to start the `REPLACEMENT WORKER`, then ask, “What happened to my refund?” That
+question and the Stripe lookup run inside the new process. Pause on the answer
+that no request reached Stripe and the return must start again.
 
 In `--real` mode, that answer comes from retrieving the PaymentIntent and refund
 list from Stripe. This is a read only: the naive half never submits the refund.

@@ -364,6 +364,42 @@ def _start_naive_at_boundary(
     )
 
 
+def _start_naive_replacement(
+    stage_state: Path,
+    *,
+    amount_cents: int,
+    payment_intent: str,
+    real: bool,
+) -> subprocess.Popen[str]:
+    """Start a fresh naive-agent process for the post-loss status question."""
+
+    environment = os.environ.copy()
+    environment["DEMO_STATE_DIR"] = str(stage_state)
+    command = [
+        sys.executable,
+        "-m",
+        "refund_agent.naive_refund",
+        "replacement-status",
+        "--order",
+        "1234",
+        "--amount-cents",
+        str(amount_cents),
+        "--payment-intent",
+        payment_intent,
+        "--hold-after-status",
+    ]
+    if real:
+        command.append("--real")
+    return subprocess.Popen(
+        command,
+        env=environment,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+
+
 def _stop_naive_worker(process: subprocess.Popen[str] | None) -> None:
     _stop_process(process, hard=True)
     if process is not None and process.stdin is not None:
@@ -393,6 +429,46 @@ async def _read_naive_loop_event(
         raise RuntimeError("timed out waiting for the naive agent loop") from error
 
 
+async def _drive_naive_replacement(
+    process: subprocess.Popen[str],
+    *,
+    status_question: str,
+    timeout: float = 10,
+) -> tuple[dict[str, object], list[dict[str, object]]]:
+    """Send one question to the replacement process and read its result."""
+
+    if process.stdin is None or process.stdout is None:
+        raise RuntimeError("replacement naive Worker pipes are unavailable")
+    process.stdin.write(status_question + "\n")
+    process.stdin.flush()
+
+    async def read_result() -> tuple[dict[str, object], list[dict[str, object]]]:
+        while True:
+            line = await asyncio.to_thread(process.stdout.readline)
+            if not line:
+                raise RuntimeError("replacement naive Worker exited before answering")
+            label, separator, raw_payload = line.partition("|")
+            if not separator:
+                continue
+            label = label.strip()
+            if label not in {"AGENT RESULT", "AGENT ERROR"}:
+                continue
+            payload = json.loads(raw_payload)
+            if label == "AGENT ERROR":
+                raise RuntimeError(
+                    "Stripe could not verify the naive outcome: "
+                    f"{payload.get('message', 'unknown error')}"
+                )
+            return dict(payload["agent"]), list(payload["refunds"])
+
+    try:
+        return await asyncio.wait_for(read_result(), timeout=timeout)
+    except TimeoutError as error:
+        raise RuntimeError(
+            "timed out waiting for the replacement naive Worker"
+        ) from error
+
+
 def _seed_test_payment(amount_cents: int) -> str:
     stripe.api_key = validate_stripe_key(os.getenv("STRIPE_API_KEY"), required=True)
     stripe.max_network_retries = 0
@@ -405,29 +481,6 @@ def _seed_test_payment(amount_cents: int) -> str:
         description="plush python (durable refund demo)",
     )
     return str(intent.id)
-
-
-def _read_real_stripe_state(
-    payment_intent_id: str,
-) -> tuple[str, list[dict[str, object]]]:
-    """Read the paid order and its refunds directly from Stripe test mode."""
-
-    stripe.api_key = validate_stripe_key(os.getenv("STRIPE_API_KEY"), required=True)
-    stripe.max_network_retries = 0
-    intent = stripe.PaymentIntent.retrieve(payment_intent_id)
-    refunds = stripe.Refund.list(payment_intent=payment_intent_id, limit=10)
-    intent_status = str(intent.status).lower()
-    payment_status = "PAID" if intent_status == "succeeded" else intent_status.upper()
-    ledger = [
-        {
-            "refund_id": str(refund.id),
-            "order": "1234",
-            "amount": int(refund.amount),
-            "status": str(refund.status).lower(),
-        }
-        for refund in refunds.data
-    ]
-    return payment_status, ledger
 
 
 def _show(console: Console, renderable, cue: str) -> str:
@@ -730,43 +783,27 @@ async def run(
             ),
             "Press Enter to start a replacement Worker",
         )
+        naive_worker = _start_naive_replacement(
+            stage_state,
+            amount_cents=amount_cents,
+            payment_intent=payment_intent,
+            real=real,
+        )
         status_question = _ask_for_refund(
             console,
             _demo_frame(
-                {"_restarted": True},
+                {"_restarted": True, "_replacement_worker": True},
                 [],
                 stage_mode=True,
             ),
             "The replacement Worker has no active loop. Ask what happened",
             default="What happened to my refund?",
         )
-        naive_payment_status = "PAID"
-        naive_refunds = _naive_ledger(stage_state)
-        if real:
-            with console.status(
-                "Checking the payment and refund directly in Stripe..."
-            ):
-                try:
-                    naive_payment_status, naive_refunds = await asyncio.to_thread(
-                        _read_real_stripe_state,
-                        payment_intent,
-                    )
-                except stripe.StripeError as error:
-                    raise RuntimeError(
-                        f"Stripe could not verify the naive outcome: {error}"
-                    ) from error
-        recovered_naive = {
-            "context": {
-                "order": "1234",
-                "amount": amount_cents,
-                "customer": "Nyghtowl",
-            },
-            "_status_checked": True,
-            "_refund_missing": not naive_refunds,
-            "_payment_status": naive_payment_status,
-            "note": "new process checked Stripe after the customer asked",
-            "user_message": status_question,
-        }
+        with console.status("Replacement Worker checking the effect owner..."):
+            recovered_naive, naive_refunds = await _drive_naive_replacement(
+                naive_worker,
+                status_question=status_question,
+            )
         _show(
             console,
             _demo_frame(
@@ -776,6 +813,8 @@ async def run(
             ),
             "Press Enter to run the same failure with durable execution",
         )
+        _stop_naive_worker(naive_worker)
+        naive_worker = None
 
         with console.status("Preparing Temporal and a private demo Worker..."):
             client = await services.connect_or_start_server()

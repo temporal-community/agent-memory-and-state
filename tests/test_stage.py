@@ -7,17 +7,19 @@ import pytest
 pytest.importorskip("rich")
 
 from refund_agent.cli import _parser
+from refund_agent.naive_refund import _read_real_stripe_state
 from refund_agent.settings import agent_view_path
 from refund_agent.stage import (
     _ask_for_refund,
     _closing,
     _drive_naive_loop,
+    _drive_naive_replacement,
     _live_model_provider,
     _naive_ledger,
-    _read_real_stripe_state,
     _roles,
     _Services,
     _start_naive_at_boundary,
+    _start_naive_replacement,
     _stop_naive_worker,
     _wait_for_first_effect,
     run,
@@ -213,8 +215,10 @@ def test_real_naive_check_reads_stripe_without_creating_a_refund(
             raise AssertionError("the naive status check must not submit a refund")
 
     monkeypatch.setenv("STRIPE_API_KEY", "sk_test_demo")
-    monkeypatch.setattr("refund_agent.stage.stripe.PaymentIntent", FakePaymentIntent)
-    monkeypatch.setattr("refund_agent.stage.stripe.Refund", FakeRefund)
+    monkeypatch.setattr(
+        "refund_agent.naive_refund.stripe.PaymentIntent", FakePaymentIntent
+    )
+    monkeypatch.setattr("refund_agent.naive_refund.stripe.Refund", FakeRefund)
 
     payment_status, refunds = _read_real_stripe_state("pi_demo")
 
@@ -262,6 +266,34 @@ def test_naive_worker_runs_questions_and_waits_before_refund(
         assert steps[-1]["result"] == "issue refund"
         assert _naive_ledger(tmp_path) == []
         assert not (tmp_path / "naive-done-1234.json").exists()
+    finally:
+        _stop_naive_worker(process)
+
+    assert process.poll() is not None
+
+
+def test_replacement_naive_worker_checks_status_in_its_own_process(tmp_path) -> None:
+    process = _start_naive_replacement(
+        tmp_path,
+        amount_cents=8000,
+        payment_intent="pi_dry_run_demo",
+        real=False,
+    )
+    try:
+        agent, refunds = asyncio.run(
+            _drive_naive_replacement(
+                process,
+                status_question="What happened to my refund?",
+            )
+        )
+
+        assert process.poll() is None
+        assert agent["_replacement_worker"] is True
+        assert agent["_worker_pid"] == process.pid
+        assert agent["_status_checked"] is True
+        assert agent["_refund_missing"] is True
+        assert agent["user_message"] == "What happened to my refund?"
+        assert refunds == []
     finally:
         _stop_naive_worker(process)
 

@@ -119,7 +119,11 @@ def test_stage_system_view_explains_a_denied_live_request() -> None:
 
 
 def test_naive_restart_returns_to_a_blank_conversation() -> None:
-    frame = _demo_frame({"_restarted": True}, [], stage_mode=True)
+    frame = _demo_frame(
+        {"_restarted": True, "_replacement_worker": True},
+        [],
+        stage_mode=True,
+    )
     output = io.StringIO()
     Console(file=output, width=128).print(frame)
     text = output.getvalue()
@@ -133,6 +137,7 @@ def test_naive_restart_returns_to_a_blank_conversation() -> None:
     assert "Ask: What happened to my refund?" in text
     assert "Payment: PAID" in text
     assert "Refund: none" in text
+    assert "REPLACEMENT WORKER" in text
 
 
 def test_naive_worker_gone_is_a_visible_stage_beat() -> None:
@@ -187,6 +192,7 @@ def test_naive_status_check_cannot_recover_working_memory_from_stripe() -> None:
             "memory": {"tenure_days": 824, "prior_refunds": 1},
             "_status_checked": True,
             "_refund_missing": True,
+            "_replacement_worker": True,
         },
         [],
         stage_mode=True,
@@ -202,6 +208,7 @@ def test_naive_status_check_cannot_recover_working_memory_from_stripe() -> None:
     assert "THE CUSTOMER RESTARTS THE LOOP" in text
     assert "Worker held the answers" in text
     assert "DUPLICATE REFUND" not in text
+    assert "REPLACEMENT WORKER" in text
 
 
 def test_naive_status_check_does_not_invent_a_refund() -> None:

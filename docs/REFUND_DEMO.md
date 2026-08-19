@@ -118,8 +118,11 @@ order and Stripe's refund state.
    must restart the return because there is no active execution to resume.
 
 With `refund-demo stage --real`, step 4 retrieves the test PaymentIntent and its
-refund list directly from Stripe. It does not create a refund. The only stage
-refund submission happens later in the Temporal-backed run.
+refund list directly from Stripe inside a fresh naive-agent subprocess. The
+question crosses stdin and the result crosses structured stdout, so this is a
+real process boundary rather than a UI-only transition. It does not create a
+refund. The only stage refund submission happens later in the Temporal-backed
+run.
 
 This is durable effect state beside lost working memory and lost application
 work. A persisted memory layer could restore the answers, but neither those

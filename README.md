@@ -182,9 +182,10 @@ The guided runner:
    questions, then performs two lookups.
 3. Replaces the Worker after the agent chooses `issue refund` but before Stripe
    is called, then holds on a visible `WORKER GONE` frame.
-4. Checks the effect owner after replacement. In `--real` mode this retrieves
-   the PaymentIntent and refund list directly from Stripe; it does not submit a
-   refund. The customer starts the return again.
+4. Starts a fresh naive-agent process and sends the customer's status question
+   across that process boundary. The replacement checks the effect owner; in
+   `--real` mode it retrieves the PaymentIntent and refund list directly from
+   Stripe without submitting a refund. The customer starts the return again.
 5. Fast-forwards the same questions and lookups through a Temporal Workflow.
 6. Replaces the Worker at the same next action; Temporal still shows two saved
    answers, two completed lookups, and `Next action: issue refund`.
