@@ -31,6 +31,10 @@ class RefundRequest:
     # recovery is visible without making an audience wait. Normal and real
     # Stripe runs keep the more conservative production-shaped timeout.
     fast_recovery: bool = False
+    # Optional stage-only failure injection. Attempt 1 blocks before contacting
+    # Stripe, like an API call that never responds; a replacement Worker then
+    # runs attempt 2 normally.
+    simulate_stripe_timeout: bool = False
     # The guided talk path is deterministic by default, even when an OpenAI key
     # or Anthropic key is present. Passing --real-model opts back into live
     # model reasoning.

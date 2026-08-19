@@ -426,6 +426,7 @@ async def _stage(args: argparse.Namespace) -> None:
             amount_cents=8000,
             model_provider=args.model_provider,
             simulate_stripe_retry=args.simulate_stripe_retry,
+            simulate_stripe_timeout=args.simulate_stripe_timeout,
         )
     except RuntimeError as error:
         print(f"STAGE | {error}")
@@ -555,6 +556,11 @@ def _parser() -> argparse.ArgumentParser:
         "--simulate-stripe-retry",
         action="store_true",
         help="interrupt after Stripe accepts attempt 1, then retry after replacement",
+    )
+    stage.add_argument(
+        "--simulate-stripe-timeout",
+        action="store_true",
+        help="hang attempt 1 before Stripe responds, then retry after replacement",
     )
 
     seed = commands.add_parser(

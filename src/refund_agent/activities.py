@@ -673,6 +673,23 @@ def issue_refund(
         f"{decision.recommendation}, idempotency key ...{idempotency_key[-8:]}",
     )
 
+    if request.simulate_stripe_timeout and info.attempt == 1:
+        # This is deliberately before the effect. It models a request waiting on
+        # an unresponsive Stripe API, so Stripe has accepted nothing. The stage
+        # runner removes this Worker; the heartbeat timeout then makes attempt 2
+        # visible in Event History and it waits for a replacement Worker.
+        _line(
+            "THE SYSTEM",
+            "Stripe API is not responding (simulated); no refund accepted",
+        )
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            time.sleep(min(1.0, max(0.0, deadline - time.monotonic())))
+        raise ApplicationError(
+            "simulated Stripe API timeout",
+            type="StripeAPITimeout",
+        )
+
     if request.dry_run:
         try:
             effect = create_refund(

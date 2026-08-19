@@ -202,6 +202,7 @@ shuts down only the processes it started.
 | --- | --- | --- |
 | `uv run refund-demo stage` | Deterministic | Offline ledger |
 | `uv run refund-demo stage --real` | Deterministic | Stripe test mode |
+| `uv run refund-demo stage --real --simulate-stripe-timeout` | Deterministic | Stripe test mode with a pre-commit API timeout retry |
 | `uv run refund-demo stage --real --simulate-stripe-retry` | Deterministic | Stripe test mode with a visible Activity retry |
 | `uv run refund-demo stage --real-model --model-provider anthropic` | Claude | Offline ledger |
 | `uv run refund-demo stage --real --real-model --model-provider anthropic` | Claude | Stripe test mode |
@@ -233,6 +234,14 @@ Press Enter to start the replacement Worker; attempt 2 reuses the same Stripe
 idempotency key, returns the original refund, and finishes as `2 CALLS → 1
 REFUND`. In Event History, the attempt-2 `ActivityTaskStarted` event carries the
 heartbeat timeout as `lastFailure`; intermediate retry failures are compacted.
+The flag also works without `--real` for an offline rehearsal.
+
+`--simulate-stripe-timeout` shows the simpler pre-commit outage. The Workflow
+does not wait on the stage-only `release` Signal: `issue_refund` begins
+immediately, but attempt 1 simulates an unresponsive Stripe API before sending
+the refund. The runner removes that Worker and pauses after Temporal advances
+the Activity to attempt 2. Stripe still has no refund at that point. Press Enter
+to start the replacement Worker; attempt 2 calls Stripe normally and completes.
 The flag also works without `--real` for an offline rehearsal.
 
 ## Read the payoff

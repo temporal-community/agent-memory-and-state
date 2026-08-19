@@ -112,6 +112,17 @@ def _tail(path: Path, line_count: int = 12) -> str:
     return "\n".join(lines[-line_count:])
 
 
+async def _wait_for_log_text(path: Path, text: str, *, timeout: float) -> None:
+    """Wait until a private stage process reaches an observable boundary."""
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if path.exists() and text in path.read_text(encoding="utf-8", errors="replace"):
+            return
+        await asyncio.sleep(0.1)
+    raise RuntimeError(f"timed out waiting for stage log: {text}")
+
+
 def _stop_process(process: subprocess.Popen[str] | None, *, hard: bool = False) -> None:
     if process is None or process.poll() is not None:
         return
@@ -600,7 +611,7 @@ def _loop_steps_from_progress(progress: dict) -> list[dict[str, str]]:
                     else "not eligible",
                 }
             )
-    if progress.get("phase") == "ready_to_refund":
+    if progress.get("phase") in {"ready_to_refund", "issuing_refund"}:
         steps.append(
             {"kind": "ready", "label": "Next action", "result": "issue refund"}
         )
@@ -647,6 +658,8 @@ async def _drive_temporal_loop(
             approval_sent = True
         elif phase == "ready_to_refund":
             return "ready", _loop_steps_from_progress(last_progress)
+        elif phase == "issuing_refund":
+            return "issuing", _loop_steps_from_progress(last_progress)
         elif phase == "denied":
             return "denied", _loop_steps_from_progress(last_progress)
         await asyncio.sleep(0.1)
@@ -703,6 +716,7 @@ async def run(
     amount_cents: int,
     model_provider: str | None = None,
     simulate_stripe_retry: bool = False,
+    simulate_stripe_timeout: bool = False,
 ) -> None:
     """Run both demos from one guided terminal."""
 
@@ -711,6 +725,11 @@ async def run(
     console = Console()
     if model_provider and not real_model:
         raise RuntimeError("--model-provider requires --real-model")
+    if simulate_stripe_retry and simulate_stripe_timeout:
+        raise RuntimeError(
+            "--simulate-stripe-retry and --simulate-stripe-timeout are mutually "
+            "exclusive"
+        )
     selected_provider = _live_model_provider(model_provider) if real_model else None
     run_token = uuid.uuid4().hex[:8]
     workflow_id = workflow_id or f"talk-refund-{run_token}"
@@ -846,8 +865,9 @@ async def run(
             damage=None,
             refund_destination="Original card",
             interactive_questions=True,
-            hold_before_effect=True,
+            hold_before_effect=not simulate_stripe_timeout,
             fast_recovery=True,
+            simulate_stripe_timeout=simulate_stripe_timeout,
             use_canned_agent=not real_model,
             model_provider=selected_provider,
         )
@@ -879,27 +899,56 @@ async def run(
                     style="bold yellow",
                 )
             return
-        _show(
-            console,
-            await _durable_frame(
-                client,
-                workflow_id,
-                loop_steps=durable_steps,
-            ),
-            "Press Enter to replace this Worker after it chooses the refund",
-        )
+        if simulate_stripe_timeout:
+            with console.status(
+                "Attempt 1 is waiting on Stripe; interrupting the Worker..."
+            ):
+                await _wait_for_log_text(
+                    services.worker_log_path,
+                    "Stripe API is not responding (simulated)",
+                    timeout=_DEMO_TIMEOUT_SECONDS,
+                )
+                services.kill_worker()
+                await asyncio.sleep(_SIMULATED_RETRY_DETECTION_SECONDS)
+            _show(
+                console,
+                await _durable_frame(
+                    client,
+                    workflow_id,
+                    loop_steps=durable_steps,
+                ),
+                "Stripe did not respond on attempt 1. Temporal is waiting at "
+                "attempt 2. Press Enter to start a replacement Worker",
+            )
+            with console.status(
+                "Replacement Worker running attempt 2 against Stripe..."
+            ):
+                await services.start_worker()
+                result = await asyncio.wait_for(
+                    handle.result(), timeout=_DEMO_TIMEOUT_SECONDS
+                )
+        else:
+            _show(
+                console,
+                await _durable_frame(
+                    client,
+                    workflow_id,
+                    loop_steps=durable_steps,
+                ),
+                "Press Enter to replace this Worker after it chooses the refund",
+            )
 
-        services.kill_worker()
-        await asyncio.sleep(0.25)
-        _show(
-            console,
-            await _durable_frame(
-                client,
-                workflow_id,
-                loop_steps=durable_steps,
-            ),
-            "Press Enter to reload the agent with a replacement Worker",
-        )
+            services.kill_worker()
+            await asyncio.sleep(0.25)
+            _show(
+                console,
+                await _durable_frame(
+                    client,
+                    workflow_id,
+                    loop_steps=durable_steps,
+                ),
+                "Press Enter to reload the agent with a replacement Worker",
+            )
 
         if simulate_stripe_retry:
             with console.status(
@@ -935,7 +984,7 @@ async def run(
                 result = await asyncio.wait_for(
                     handle.result(), timeout=_DEMO_TIMEOUT_SECONDS
                 )
-        else:
+        elif not simulate_stripe_timeout:
             with console.status(
                 "Resuming at the saved next action; no repeated questions..."
             ):

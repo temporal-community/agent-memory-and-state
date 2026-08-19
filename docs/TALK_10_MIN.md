@@ -271,6 +271,11 @@ recover it.”
 
 ## Stage controls
 
+For a visible retry without a release Signal, start with `uv run refund-demo
+stage --real --simulate-stripe-timeout`. Attempt 1 waits on a simulated
+unresponsive Stripe API, the Worker disappears, and attempt 2 remains pending
+until you start the replacement Worker.
+
 For the optional uncertain-effect ending, start with `uv run refund-demo stage
 --real --simulate-stripe-retry`. After Stripe accepts attempt 1, the runner
 removes the Worker and waits with the Activity unresolved. Press Enter once to

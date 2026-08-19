@@ -231,6 +231,19 @@ the attempt, Stripe owns the effect, and the retry uses one idempotency key.
 Temporal does not turn the two records into one database transaction; it gives
 the uncertain attempt a durable recovery point and stable identity.
 
+For a pre-commit API outage instead, run:
+
+```bash
+uv run refund-demo stage --real --simulate-stripe-timeout
+```
+
+This path does not use the `release` Signal. Attempt 1 enters `issue_refund` and
+simulates Stripe never responding before accepting a refund. The Worker then
+disappears, Temporal advances the unresolved Activity to attempt 2, and no call
+can complete until you start the replacement Worker. Attempt 2 calls Stripe
+normally. Use this path when the story is “the API was down”; use
+`--simulate-stripe-retry` for the harder post-commit uncertainty case.
+
 Stripe's idempotency support is what keeps a repeated call from creating a
 second refund. Temporal remembers that the step is unresolved, arranges the
 retry after the Worker disappears, and records the result so a reloaded agent

@@ -22,6 +22,7 @@ from refund_agent.stage import (
     _start_naive_replacement,
     _stop_naive_worker,
     _wait_for_first_effect,
+    _wait_for_log_text,
     run,
 )
 
@@ -69,6 +70,7 @@ def test_stage_command_defaults_to_offline_deterministic_mode() -> None:
     assert args.real_model is False
     assert args.model_provider is None
     assert args.simulate_stripe_retry is False
+    assert args.simulate_stripe_timeout is False
 
 
 def test_stage_can_enable_the_stripe_retry_simulation() -> None:
@@ -76,6 +78,40 @@ def test_stage_can_enable_the_stripe_retry_simulation() -> None:
 
     assert args.real is True
     assert args.simulate_stripe_retry is True
+
+
+def test_stage_can_enable_the_stripe_timeout_simulation() -> None:
+    args = _parser().parse_args(["stage", "--real", "--simulate-stripe-timeout"])
+
+    assert args.real is True
+    assert args.simulate_stripe_timeout is True
+
+
+def test_stripe_retry_simulations_are_mutually_exclusive() -> None:
+    with pytest.raises(RuntimeError, match="mutually exclusive"):
+        asyncio.run(
+            run(
+                workflow_id="test-stage",
+                real=False,
+                real_model=False,
+                amount_cents=8000,
+                simulate_stripe_retry=True,
+                simulate_stripe_timeout=True,
+            )
+        )
+
+
+def test_stage_can_wait_for_the_simulated_timeout_log(tmp_path) -> None:
+    path = tmp_path / "worker.log"
+    path.write_text("Stripe API is not responding (simulated)\n", encoding="utf-8")
+
+    asyncio.run(
+        _wait_for_log_text(
+            path,
+            "Stripe API is not responding (simulated)",
+            timeout=0.1,
+        )
+    )
 
 
 def test_real_model_mode_requires_an_api_key(monkeypatch) -> None:
