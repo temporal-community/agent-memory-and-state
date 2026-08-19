@@ -145,10 +145,13 @@ def test_stage_closing_states_the_observable_outcome() -> None:
 
     assert "agent loop started over" in panels[0].renderable.plain
     assert "reloaded agent resumed at its next action" in panels[0].renderable.plain
-    assert "No repeated questions" in panels[0].renderable.plain
-    assert "One submitted request, one refund" in panels[0].renderable.plain
+    assert "No repeated questions" not in panels[0].renderable.plain
+    assert "One submitted request, one refund" not in panels[0].renderable.plain
     assert "Stripe knows what reached Stripe" in panels[1].renderable
-    assert "application work" in panels[1].renderable
+    assert (
+        "Temporal remembered that the refund step was in progress"
+        in panels[1].renderable
+    )
 
 
 def test_stage_accepts_a_spoken_refund_request(monkeypatch) -> None:

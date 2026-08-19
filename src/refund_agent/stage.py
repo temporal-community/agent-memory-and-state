@@ -84,17 +84,14 @@ def _closing(refund_status: str = "succeeded") -> Group:
     )
     if refund_status.lower() == "succeeded":
         result.append(
-            "Durable: the reloaded agent resumed at its next action.\n\n",
+            "Durable: the reloaded agent resumed at its next action.",
             style="bold green",
         )
-        result.append("No repeated questions.  ", style="bold green")
-        result.append("One submitted request, one refund.", style="green")
     else:
         result.append(
-            "Durable: the reloaded agent resumed the same request.\n\n",
+            "Durable: the reloaded agent resumed the same request.\n",
             style="bold yellow",
         )
-        result.append("No repeated questions.  ", style="bold green")
         result.append(
             f"Stripe status: {refund_status.upper()} — not reported as complete.",
             style="yellow",
@@ -102,8 +99,8 @@ def _closing(refund_status: str = "succeeded") -> Group:
     return Group(
         Panel(result, title="The difference", border_style="green"),
         Panel(
-            "Stripe knows what reached Stripe. Temporal remembers the accepted "
-            "application work that still needs to finish.",
+            "Stripe knows what reached Stripe. Temporal remembered that the "
+            "refund step was in progress.",
             border_style="white",
         ),
     )
