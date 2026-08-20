@@ -265,6 +265,16 @@ is whether the autonomous work itself still has a position:
 | The answers and active loop disappear; Stripe only says paid with no refund. | Temporal retains completed observations and `Next action: issue refund`; the replacement continues without repeating questions. |
 | ![The naive replacement agent has lost the return answers and asks the customer to start again](assets/naive-loop-restarts.png) | ![The reloaded Temporal-backed agent completes the refund without repeating questions or restarting the loop](assets/durable-recovered.png) |
 
+### See the durable Workflow
+
+![Temporal Web showing the running RefundApprovalAgent Workflow and its stage_progress Query at ready_to_refund](assets/temporal-workflow-state.png)
+
+Immediately before the Worker is replaced, Temporal Web shows the Workflow as
+`Running`. The `stage_progress` Query exposes replayable Workflow state:
+`phase: ready_to_refund`, both customer answers, and the completed lookup
+results. After that Worker disappears, Event History remains; the replacement
+Worker reconstructs this state by replay and continues from the saved step.
+
 The durable side has two owners:
 
 - **Temporal** owns the Activity attempt and execution progress.
