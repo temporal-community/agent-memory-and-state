@@ -28,6 +28,8 @@ memory, and authoritative state visible.
 
 [Watch or download the MP4 version](assets/demo-reel.mp4).
 
+[View the presentation deck: *Agentic Memory and State* (PDF)](docs/agentic-memory-and-state.pdf).
+
 | Moment | Naive agent | Durable agent |
 | --- | --- | --- |
 | **Before the request** | Nyghtowl's plush python is paid in Stripe | The same paid order |
