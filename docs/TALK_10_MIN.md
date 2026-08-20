@@ -116,10 +116,11 @@ called.”
 
 **Action**
 
-The screen reloads with `REPLACEMENT WORKER`. The process-local answers and loop
-position are gone; Stripe still shows its authoritative state. Ask, “What
-happened to my refund?” Pause on the answer that no request reached Stripe and
-the return must start again.
+Hold the `WORKER GONE` frame for three seconds. The process-local answers and
+loop position are gone; Stripe still shows its authoritative state. Press Enter
+to start the `REPLACEMENT WORKER`, then ask, “What happened to my refund?” That
+question and the Stripe lookup run inside the new process. Pause on the answer
+that no request reached Stripe and the return must start again.
 
 In `--real` mode, that answer comes from retrieving the PaymentIntent and refund
 list from Stripe. This is a read only: the naive half never submits the refund.
@@ -270,10 +271,22 @@ recover it.”
 
 ## Stage controls
 
+For a visible retry without a release Signal, start with `uv run refund-demo
+stage --real --simulate-stripe-timeout`. Attempt 1 waits on a simulated
+unresponsive Stripe API, the Worker disappears, and attempt 2 remains pending
+until you start the replacement Worker.
+
+For the optional uncertain-effect ending, start with `uv run refund-demo stage
+--real --simulate-stripe-retry`. After Stripe accepts attempt 1, the runner
+removes the Worker and waits with the Activity unresolved. Press Enter once to
+start the replacement Worker. Temporal's Event History then exposes
+`ActivityTaskStarted` attempt 2 with the heartbeat timeout in `lastFailure`.
+
 | Control | Screen or action | Target time |
 | --- | --- | --- |
 | Enter | Empty naive agent | 0:45 |
 | Type refund request + Enter through 2 answers | Four observations and `Next: issue refund` are visible | 1:55 |
+| Enter | Naive Worker replaced; `WORKER GONE` | 2:10 |
 | Enter | Replacement Worker opens; memory returns but loop position is gone | 2:15 |
 | Ask “What happened to my refund?” | Agent checks Stripe; `THE CUSTOMER RESTARTS THE LOOP` appears | 2:50 |
 | Enter | Empty durable agent | 3:45 |

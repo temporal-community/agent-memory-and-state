@@ -118,8 +118,11 @@ order and Stripe's refund state.
    must restart the return because there is no active execution to resume.
 
 With `refund-demo stage --real`, step 4 retrieves the test PaymentIntent and its
-refund list directly from Stripe. It does not create a refund. The only stage
-refund submission happens later in the Temporal-backed run.
+refund list directly from Stripe inside a fresh naive-agent subprocess. The
+question crosses stdin and the result crosses structured stdout, so this is a
+real process boundary rather than a UI-only transition. It does not create a
+refund. The only stage refund submission happens later in the Temporal-backed
+run.
 
 This is durable effect state beside lost working memory and lost application
 work. A persisted memory layer could restore the answers, but neither those
@@ -207,11 +210,39 @@ uv run refund-demo stop demo-refund
 
 This is the mechanical core of the durability payoff.
 
+The easiest single-terminal version is:
+
+```bash
+uv run refund-demo stage --real --simulate-stripe-retry
+```
+
+The runner waits until Stripe accepts attempt 1, kills the Worker before the
+Activity reports completion, and pauses with the retry unresolved. Temporal's
+Event History compacts the intermediate failure: after recovery, the
+`ActivityTaskStarted` event carries `attempt: 2` and a `lastFailure` heartbeat
+timeout rather than a separate `ActivityTaskTimedOut` event. Press Enter to
+start the replacement Worker; attempt 2 uses the same Stripe idempotency key and
+returns the same refund. Run the same command without `--real` to rehearse
+against the offline ledger.
+
 The failure lands after Stripe accepts the refund but before the Activity can
 report completion. The process cannot know whether money moved. Temporal owns
 the attempt, Stripe owns the effect, and the retry uses one idempotency key.
 Temporal does not turn the two records into one database transaction; it gives
 the uncertain attempt a durable recovery point and stable identity.
+
+For a pre-commit API outage instead, run:
+
+```bash
+uv run refund-demo stage --real --simulate-stripe-timeout
+```
+
+This path does not use the `release` Signal. Attempt 1 enters `issue_refund` and
+simulates Stripe never responding before accepting a refund. The Worker then
+disappears, Temporal advances the unresolved Activity to attempt 2, and no call
+can complete until you start the replacement Worker. Attempt 2 calls Stripe
+normally. Use this path when the story is “the API was down”; use
+`--simulate-stripe-retry` for the harder post-commit uncertainty case.
 
 Stripe's idempotency support is what keeps a repeated call from creating a
 second refund. Temporal remembers that the step is unresolved, arranges the

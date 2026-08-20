@@ -156,8 +156,11 @@ class RefundWorkflow:
                 "EXECUTION STATE | phase=ready_to_refund | DURABLE WAIT"
             )
             await workflow.wait_condition(lambda: self.released)
-            self.stage_phase_value = "issuing_refund"
             workflow.logger.info("EXECUTION STATE | phase=refund_resumed")
+
+        self.stage_phase_value = "issuing_refund"
+        if not request.hold_before_effect:
+            workflow.logger.info("EXECUTION STATE | phase=issuing_refund")
 
         # EXTERNAL EFFECT: retries reuse one Stripe idempotency key.
         heartbeat_timeout = timedelta(seconds=3 if request.fast_recovery else 15)

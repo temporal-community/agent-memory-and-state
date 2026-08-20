@@ -120,7 +120,8 @@ def _render_naive_frames(output_dir: Path) -> None:
         "context": {"order": "1234", "amount": 8000, "customer": "Nyghtowl"},
         "_status_checked": True,
         "_refund_missing": True,
-        "note": "new process checked Stripe after the customer asked",
+        "_replacement_worker": True,
+        "note": "replacement process checked Stripe after the customer asked",
     }
     frames = [
         (
@@ -134,16 +135,25 @@ def _render_naive_frames(output_dir: Path) -> None:
             "Naive demo — next action chosen",
         ),
         (
-            "03-naive-restarted.html",
+            "03-naive-worker-gone.html",
             _demo_frame(
-                {"_restarted": True},
+                {"_worker_gone": True},
+                [],
+                stage_mode=True,
+            ),
+            "Naive demo — Worker gone",
+        ),
+        (
+            "04-naive-replacement.html",
+            _demo_frame(
+                {"_restarted": True, "_replacement_worker": True},
                 [],
                 stage_mode=True,
             ),
             "Naive demo — replacement Worker",
         ),
         (
-            "04-naive-loop-restarts.html",
+            "05-naive-loop-restarts.html",
             _demo_frame(status_agent, [], stage_mode=True),
             "Naive demo — loop must restart",
         ),
@@ -170,7 +180,7 @@ def _render_durable_frames(output_dir: Path) -> None:
                         refund_step_completed=False,
                     ),
                 ),
-                output_dir / "05-durable-start.html",
+                output_dir / "06-durable-start.html",
                 title="Durable demo — ready",
             )
 
@@ -205,7 +215,7 @@ def _render_durable_frames(output_dir: Path) -> None:
                         loop_steps=DEMO_LOOP_STEPS,
                     ),
                 ),
-                output_dir / "06-durable-lost.html",
+                output_dir / "07-durable-lost.html",
                 title="Durable demo — Worker lost",
             )
 
@@ -226,7 +236,7 @@ def _render_durable_frames(output_dir: Path) -> None:
                         loop_steps=DEMO_LOOP_STEPS,
                     ),
                 ),
-                output_dir / "07-durable-recovered.html",
+                output_dir / "08-durable-recovered.html",
                 title="Durable demo — recovered to one refund",
             )
     finally:
@@ -246,9 +256,11 @@ def main() -> None:
     )
     args = parser.parse_args()
     args.output_dir.mkdir(parents=True, exist_ok=True)
+    for stale_frame in args.output_dir.glob("*.html"):
+        stale_frame.unlink()
     _render_naive_frames(args.output_dir)
     _render_durable_frames(args.output_dir)
-    print(f"rendered 7 frames to {args.output_dir}")
+    print(f"rendered 8 frames to {args.output_dir}")
 
 
 if __name__ == "__main__":

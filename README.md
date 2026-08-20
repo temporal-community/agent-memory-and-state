@@ -28,6 +28,8 @@ memory, and authoritative state visible.
 
 [Watch or download the MP4 version](assets/demo-reel.mp4).
 
+[View the presentation deck: *Agentic Memory and State* (PDF)](docs/agentic-memory-and-state.pdf).
+
 | Moment | Naive agent | Durable agent |
 | --- | --- | --- |
 | **Before the request** | Nyghtowl's plush python is paid in Stripe | The same paid order |
@@ -181,10 +183,11 @@ The guided runner:
 2. Lets you ask for a refund while the naive agent chooses and asks two
    questions, then performs two lookups.
 3. Replaces the Worker after the agent chooses `issue refund` but before Stripe
-   is called.
-4. Checks the effect owner after replacement. In `--real` mode this retrieves
-   the PaymentIntent and refund list directly from Stripe; it does not submit a
-   refund. The customer starts the return again.
+   is called, then holds on a visible `WORKER GONE` frame.
+4. Starts a fresh naive-agent process and sends the customer's status question
+   across that process boundary. The replacement checks the effect owner; in
+   `--real` mode it retrieves the PaymentIntent and refund list directly from
+   Stripe without submitting a refund. The customer starts the return again.
 5. Fast-forwards the same questions and lookups through a Temporal Workflow.
 6. Replaces the Worker at the same next action; Temporal still shows two saved
    answers, two completed lookups, and `Next action: issue refund`.
@@ -195,27 +198,41 @@ It uses a deterministic policy and offline Stripe-like ledger by default. It
 starts a local Temporal dev server only when one is not already reachable and
 shuts down only the processes it started.
 
-### Choose how real the run should be
+### Choose the stage path
 
-| Command | Model | Refund effect |
-| --- | --- | --- |
-| `uv run refund-demo stage` | Deterministic | Offline ledger |
-| `uv run refund-demo stage --real` | Deterministic | Stripe test mode |
-| `uv run refund-demo stage --real-model --model-provider anthropic` | Claude | Offline ledger |
-| `uv run refund-demo stage --real --real-model --model-provider anthropic` | Claude | Stripe test mode |
-| `uv run refund-demo stage --real-model --model-provider openai` | OpenAI | Offline ledger |
+| Goal | Command |
+| --- | --- |
+| Rehearse safely with deterministic responses and an offline ledger | `uv run refund-demo stage` |
+| Run the same story against Stripe test mode | `uv run refund-demo stage --real` |
+| Show a real Activity retry after a simulated Stripe timeout | `uv run refund-demo stage --real --simulate-stripe-timeout` |
 
-Claude mode requires `ANTHROPIC_API_KEY` and `ANTHROPIC_MODEL`; OpenAI mode
-requires `OPENAI_API_KEY` and `OPENAI_MODEL`. Set `AGENT_MODEL_PROVIDER`, or use
-`--model-provider`, when both keys are configured. Real refund mode requires a
-Stripe `sk_test_` or `rk_test_` key. Live Stripe keys are rejected. Put local
-values in `.env`; exported shell variables take precedence.
+The timeout path is the recommended retry demo. Attempt 1 enters
+`issue_refund`, but the simulated Stripe API does not respond before the Worker
+disappears. No `release` Signal holds the Activity. Temporal advances it to
+attempt 2 and waits until you start the replacement Worker; only then does the
+refund reach Stripe.
+
+Add `--real-model --model-provider anthropic` for Claude or
+`--real-model --model-provider openai` for OpenAI. Claude mode requires
+`ANTHROPIC_API_KEY` and `ANTHROPIC_MODEL`; OpenAI mode requires
+`OPENAI_API_KEY` and `OPENAI_MODEL`. Real refund mode requires a Stripe
+`sk_test_` or `rk_test_` key. Live Stripe keys are rejected. Put local values in
+`.env`; exported shell variables take precedence.
 
 In `--real` mode, the runner creates and confirms Nyghtowl's Stripe test
 PaymentIntent before the first refund prompt. That is the `PAID` order visible
 in both demos. The naive half reads that PaymentIntent and confirms no refund
 reached Stripe; only the durable half later refunds the test payment. If a run
-ends before the refund, use `uv run refund-demo cleanup`.
+ends before the refund, reconcile it with:
+
+```bash
+uv run refund-demo cleanup
+```
+
+Cleanup refunds only outstanding test payments created by this demo. It does
+not delete Stripe test objects or make the Dashboard's row counts match: Stripe
+retains both payment and refund records. `refunded 0 cents` means the cleanup
+scan found no outstanding recognized demo payment.
 
 Test a live model against the offline ledger before combining it with `--real`.
 The demo uses a fixed, refund-eligible plush-python order, so the spoken request
@@ -223,6 +240,14 @@ should refer to order 1234 or the plush python. Its policy record explicitly say
 that this low-value damaged item does not require a physical return. If a live
 model denies a conflicting request, the stage shows its rationale and the fact
 that no refund was issued instead of exiting on an empty screen.
+
+For the advanced post-commit uncertainty case, use
+`--simulate-stripe-retry`. Stripe accepts attempt 1, but the Worker disappears
+before Temporal records the result. Attempt 2 reuses the same idempotency key,
+so two calls resolve to one refund. This mode deliberately keeps the stage-only
+`release` Signal; it is the technical idempotency walkthrough, not the
+recommended API-outage story. Both simulation flags also work without `--real`
+for an offline rehearsal.
 
 ## Read the payoff
 
@@ -290,7 +315,7 @@ src/refund_agent/naive_refund.py   uncoordinated comparison
 src/refund_agent/fake_stripe.py    offline effect ledger
 src/refund_agent/permission_chat.py authorization-state companion
 assets/                            generated demo reel and screenshots
-docs/                              concepts and detailed demo guides
+docs/                              concepts, talk notes, and detailed demo guides
 tests/                             agent, effect, stage, and settings tests
 ```
 

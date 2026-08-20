@@ -41,6 +41,8 @@ _SERVER_START_TIMEOUT_SECONDS = 20
 _WORKER_START_TIMEOUT_SECONDS = 15
 _DEMO_TIMEOUT_SECONDS = 90
 _DEFAULT_REFUND_REQUEST = "Please refund order 1234."
+_SIMULATED_RETRY_WINDOW_SECONDS = 30
+_SIMULATED_RETRY_DETECTION_SECONDS = 4
 
 
 def _roles() -> Panel:
@@ -65,8 +67,7 @@ def _intro() -> Group:
         "customer submitted.\n\n"
     )
     thesis.append(
-        "We will interrupt the same observe–reason–act loop before Stripe "
-        "receives the refund request, then add a durable owner for its progress."
+        "We'll interrupt the agent before Stripe, then make its progress durable."
     )
     return Group(
         Panel(thesis, title="Agent memory and state", border_style="cyan"),
@@ -82,17 +83,14 @@ def _closing(refund_status: str = "succeeded") -> Group:
     )
     if refund_status.lower() == "succeeded":
         result.append(
-            "Durable: the reloaded agent resumed at its next action.\n\n",
+            "Durable: the reloaded agent resumed at its next action.",
             style="bold green",
         )
-        result.append("No repeated questions.  ", style="bold green")
-        result.append("One submitted request, one refund.", style="green")
     else:
         result.append(
-            "Durable: the reloaded agent resumed the same request.\n\n",
+            "Durable: the reloaded agent resumed the same request.\n",
             style="bold yellow",
         )
-        result.append("No repeated questions.  ", style="bold green")
         result.append(
             f"Stripe status: {refund_status.upper()} — not reported as complete.",
             style="yellow",
@@ -100,8 +98,8 @@ def _closing(refund_status: str = "succeeded") -> Group:
     return Group(
         Panel(result, title="The difference", border_style="green"),
         Panel(
-            "Stripe knows what reached Stripe. Temporal remembers the accepted "
-            "application work that still needs to finish.",
+            "Stripe knows what reached Stripe. Temporal remembered that the "
+            "refund step was in progress.",
             border_style="white",
         ),
     )
@@ -112,6 +110,17 @@ def _tail(path: Path, line_count: int = 12) -> str:
         return "(no log output)"
     lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
     return "\n".join(lines[-line_count:])
+
+
+async def _wait_for_log_text(path: Path, text: str, *, timeout: float) -> None:
+    """Wait until a private stage process reaches an observable boundary."""
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if path.exists() and text in path.read_text(encoding="utf-8", errors="replace"):
+            return
+        await asyncio.sleep(0.1)
+    raise RuntimeError(f"timed out waiting for stage log: {text}")
 
 
 def _stop_process(process: subprocess.Popen[str] | None, *, hard: bool = False) -> None:
@@ -129,10 +138,18 @@ def _stop_process(process: subprocess.Popen[str] | None, *, hard: bool = False) 
 
 
 class _Services:
-    def __init__(self, *, base_state: Path, stage_state: Path, task_queue: str) -> None:
+    def __init__(
+        self,
+        *,
+        base_state: Path,
+        stage_state: Path,
+        task_queue: str,
+        effect_restart_window_seconds: float = 0,
+    ) -> None:
         self.base_state = base_state
         self.stage_state = stage_state
         self.task_queue = task_queue
+        self.effect_restart_window_seconds = effect_restart_window_seconds
         self.server: subprocess.Popen[str] | None = None
         self.worker: subprocess.Popen[str] | None = None
         self.server_log_path = stage_state / "temporal.log"
@@ -202,9 +219,9 @@ class _Services:
         environment = os.environ.copy()
         environment["DEMO_STATE_DIR"] = str(self.stage_state)
         environment["TEMPORAL_TASK_QUEUE"] = self.task_queue
-        # The guided story now replaces the Worker before Stripe is called. The
-        # separate manual demo still covers the uncertain post-effect boundary.
-        environment["EFFECT_RESTART_WINDOW_SECONDS"] = "0"
+        environment["EFFECT_RESTART_WINDOW_SECONDS"] = str(
+            self.effect_restart_window_seconds
+        )
         self.worker = subprocess.Popen(
             [sys.executable, "-m", "refund_agent.worker"],
             env=environment,
@@ -364,6 +381,42 @@ def _start_naive_at_boundary(
     )
 
 
+def _start_naive_replacement(
+    stage_state: Path,
+    *,
+    amount_cents: int,
+    payment_intent: str,
+    real: bool,
+) -> subprocess.Popen[str]:
+    """Start a fresh naive-agent process for the post-loss status question."""
+
+    environment = os.environ.copy()
+    environment["DEMO_STATE_DIR"] = str(stage_state)
+    command = [
+        sys.executable,
+        "-m",
+        "refund_agent.naive_refund",
+        "replacement-status",
+        "--order",
+        "1234",
+        "--amount-cents",
+        str(amount_cents),
+        "--payment-intent",
+        payment_intent,
+        "--hold-after-status",
+    ]
+    if real:
+        command.append("--real")
+    return subprocess.Popen(
+        command,
+        env=environment,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+
+
 def _stop_naive_worker(process: subprocess.Popen[str] | None) -> None:
     _stop_process(process, hard=True)
     if process is not None and process.stdin is not None:
@@ -393,6 +446,46 @@ async def _read_naive_loop_event(
         raise RuntimeError("timed out waiting for the naive agent loop") from error
 
 
+async def _drive_naive_replacement(
+    process: subprocess.Popen[str],
+    *,
+    status_question: str,
+    timeout: float = 10,
+) -> tuple[dict[str, object], list[dict[str, object]]]:
+    """Send one question to the replacement process and read its result."""
+
+    if process.stdin is None or process.stdout is None:
+        raise RuntimeError("replacement naive Worker pipes are unavailable")
+    process.stdin.write(status_question + "\n")
+    process.stdin.flush()
+
+    async def read_result() -> tuple[dict[str, object], list[dict[str, object]]]:
+        while True:
+            line = await asyncio.to_thread(process.stdout.readline)
+            if not line:
+                raise RuntimeError("replacement naive Worker exited before answering")
+            label, separator, raw_payload = line.partition("|")
+            if not separator:
+                continue
+            label = label.strip()
+            if label not in {"AGENT RESULT", "AGENT ERROR"}:
+                continue
+            payload = json.loads(raw_payload)
+            if label == "AGENT ERROR":
+                raise RuntimeError(
+                    "Stripe could not verify the naive outcome: "
+                    f"{payload.get('message', 'unknown error')}"
+                )
+            return dict(payload["agent"]), list(payload["refunds"])
+
+    try:
+        return await asyncio.wait_for(read_result(), timeout=timeout)
+    except TimeoutError as error:
+        raise RuntimeError(
+            "timed out waiting for the replacement naive Worker"
+        ) from error
+
+
 def _seed_test_payment(amount_cents: int) -> str:
     stripe.api_key = validate_stripe_key(os.getenv("STRIPE_API_KEY"), required=True)
     stripe.max_network_retries = 0
@@ -405,29 +498,6 @@ def _seed_test_payment(amount_cents: int) -> str:
         description="plush python (durable refund demo)",
     )
     return str(intent.id)
-
-
-def _read_real_stripe_state(
-    payment_intent_id: str,
-) -> tuple[str, list[dict[str, object]]]:
-    """Read the paid order and its refunds directly from Stripe test mode."""
-
-    stripe.api_key = validate_stripe_key(os.getenv("STRIPE_API_KEY"), required=True)
-    stripe.max_network_retries = 0
-    intent = stripe.PaymentIntent.retrieve(payment_intent_id)
-    refunds = stripe.Refund.list(payment_intent=payment_intent_id, limit=10)
-    intent_status = str(intent.status).lower()
-    payment_status = "PAID" if intent_status == "succeeded" else intent_status.upper()
-    ledger = [
-        {
-            "refund_id": str(refund.id),
-            "order": "1234",
-            "amount": int(refund.amount),
-            "status": str(refund.status).lower(),
-        }
-        for refund in refunds.data
-    ]
-    return payment_status, ledger
 
 
 def _show(console: Console, renderable, cue: str) -> str:
@@ -541,7 +611,7 @@ def _loop_steps_from_progress(progress: dict) -> list[dict[str, str]]:
                     else "not eligible",
                 }
             )
-    if progress.get("phase") == "ready_to_refund":
+    if progress.get("phase") in {"ready_to_refund", "issuing_refund"}:
         steps.append(
             {"kind": "ready", "label": "Next action", "result": "issue refund"}
         )
@@ -588,6 +658,8 @@ async def _drive_temporal_loop(
             approval_sent = True
         elif phase == "ready_to_refund":
             return "ready", _loop_steps_from_progress(last_progress)
+        elif phase == "issuing_refund":
+            return "issuing", _loop_steps_from_progress(last_progress)
         elif phase == "denied":
             return "denied", _loop_steps_from_progress(last_progress)
         await asyncio.sleep(0.1)
@@ -643,6 +715,8 @@ async def run(
     real_model: bool,
     amount_cents: int,
     model_provider: str | None = None,
+    simulate_stripe_retry: bool = False,
+    simulate_stripe_timeout: bool = False,
 ) -> None:
     """Run both demos from one guided terminal."""
 
@@ -651,6 +725,11 @@ async def run(
     console = Console()
     if model_provider and not real_model:
         raise RuntimeError("--model-provider requires --real-model")
+    if simulate_stripe_retry and simulate_stripe_timeout:
+        raise RuntimeError(
+            "--simulate-stripe-retry and --simulate-stripe-timeout are mutually "
+            "exclusive"
+        )
     selected_provider = _live_model_provider(model_provider) if real_model else None
     run_token = uuid.uuid4().hex[:8]
     workflow_id = workflow_id or f"talk-refund-{run_token}"
@@ -662,6 +741,9 @@ async def run(
         base_state=base_state,
         stage_state=stage_state,
         task_queue=queue,
+        effect_restart_window_seconds=(
+            _SIMULATED_RETRY_WINDOW_SECONDS if simulate_stripe_retry else 0
+        ),
     )
     previous_state_dir = os.environ.get("DEMO_STATE_DIR")
     os.environ["DEMO_STATE_DIR"] = str(stage_state)
@@ -721,43 +803,36 @@ async def run(
         )
         _stop_naive_worker(naive_worker)
         naive_worker = None
+        _show(
+            console,
+            _demo_frame(
+                {"_worker_gone": True},
+                [],
+                stage_mode=True,
+            ),
+            "Press Enter to start a replacement Worker",
+        )
+        naive_worker = _start_naive_replacement(
+            stage_state,
+            amount_cents=amount_cents,
+            payment_intent=payment_intent,
+            real=real,
+        )
         status_question = _ask_for_refund(
             console,
             _demo_frame(
-                {"_restarted": True},
+                {"_restarted": True, "_replacement_worker": True},
                 [],
                 stage_mode=True,
             ),
             "The replacement Worker has no active loop. Ask what happened",
             default="What happened to my refund?",
         )
-        naive_payment_status = "PAID"
-        naive_refunds = _naive_ledger(stage_state)
-        if real:
-            with console.status(
-                "Checking the payment and refund directly in Stripe..."
-            ):
-                try:
-                    naive_payment_status, naive_refunds = await asyncio.to_thread(
-                        _read_real_stripe_state,
-                        payment_intent,
-                    )
-                except stripe.StripeError as error:
-                    raise RuntimeError(
-                        f"Stripe could not verify the naive outcome: {error}"
-                    ) from error
-        recovered_naive = {
-            "context": {
-                "order": "1234",
-                "amount": amount_cents,
-                "customer": "Nyghtowl",
-            },
-            "_status_checked": True,
-            "_refund_missing": not naive_refunds,
-            "_payment_status": naive_payment_status,
-            "note": "new process checked Stripe after the customer asked",
-            "user_message": status_question,
-        }
+        with console.status("Replacement Worker checking the effect owner..."):
+            recovered_naive, naive_refunds = await _drive_naive_replacement(
+                naive_worker,
+                status_question=status_question,
+            )
         _show(
             console,
             _demo_frame(
@@ -767,6 +842,8 @@ async def run(
             ),
             "Press Enter to run the same failure with durable execution",
         )
+        _stop_naive_worker(naive_worker)
+        naive_worker = None
 
         with console.status("Preparing Temporal and a private demo Worker..."):
             client = await services.connect_or_start_server()
@@ -788,8 +865,9 @@ async def run(
             damage=None,
             refund_destination="Original card",
             interactive_questions=True,
-            hold_before_effect=True,
+            hold_before_effect=not simulate_stripe_timeout,
             fast_recovery=True,
+            simulate_stripe_timeout=simulate_stripe_timeout,
             use_canned_agent=not real_model,
             model_provider=selected_provider,
         )
@@ -821,36 +899,100 @@ async def run(
                     style="bold yellow",
                 )
             return
-        _show(
-            console,
-            await _durable_frame(
-                client,
-                workflow_id,
-                loop_steps=durable_steps,
-            ),
-            "Press Enter to replace this Worker after it chooses the refund",
-        )
-
-        services.kill_worker()
-        await asyncio.sleep(0.25)
-        _show(
-            console,
-            await _durable_frame(
-                client,
-                workflow_id,
-                loop_steps=durable_steps,
-            ),
-            "Press Enter to reload the agent with a replacement Worker",
-        )
-
-        with console.status(
-            "Resuming at the saved next action; no repeated questions..."
-        ):
-            await services.start_worker()
-            await handle.signal(RefundWorkflow.release)
-            result = await asyncio.wait_for(
-                handle.result(), timeout=_DEMO_TIMEOUT_SECONDS
+        if simulate_stripe_timeout:
+            with console.status(
+                "Attempt 1 is waiting on Stripe; interrupting the Worker..."
+            ):
+                await _wait_for_log_text(
+                    services.worker_log_path,
+                    "Stripe API is not responding (simulated)",
+                    timeout=_DEMO_TIMEOUT_SECONDS,
+                )
+                services.kill_worker()
+                await asyncio.sleep(_SIMULATED_RETRY_DETECTION_SECONDS)
+            _show(
+                console,
+                await _durable_frame(
+                    client,
+                    workflow_id,
+                    loop_steps=durable_steps,
+                ),
+                "Stripe did not respond on attempt 1. Temporal is waiting at "
+                "attempt 2. Press Enter to start a replacement Worker",
             )
+            with console.status(
+                "Replacement Worker running attempt 2 against Stripe..."
+            ):
+                await services.start_worker()
+                result = await asyncio.wait_for(
+                    handle.result(), timeout=_DEMO_TIMEOUT_SECONDS
+                )
+        else:
+            _show(
+                console,
+                await _durable_frame(
+                    client,
+                    workflow_id,
+                    loop_steps=durable_steps,
+                ),
+                "Press Enter to replace this Worker after it chooses the refund",
+            )
+
+            services.kill_worker()
+            await asyncio.sleep(0.25)
+            _show(
+                console,
+                await _durable_frame(
+                    client,
+                    workflow_id,
+                    loop_steps=durable_steps,
+                ),
+                "Press Enter to reload the agent with a replacement Worker",
+            )
+
+        if simulate_stripe_retry:
+            with console.status(
+                "Calling Stripe, then interrupting before Temporal records it..."
+            ):
+                await services.start_worker()
+                await handle.signal(RefundWorkflow.release)
+                effect_outcome = await _wait_for_first_effect(
+                    handle,
+                    workflow_id,
+                    timeout=_DEMO_TIMEOUT_SECONDS,
+                )
+                if effect_outcome != "effect":
+                    raise RuntimeError(
+                        "the retry simulation ended before Stripe accepted the refund"
+                    )
+                services.kill_worker()
+                await asyncio.sleep(_SIMULATED_RETRY_DETECTION_SECONDS)
+            _show(
+                console,
+                await _durable_frame(
+                    client,
+                    workflow_id,
+                    loop_steps=durable_steps,
+                ),
+                "Stripe accepted attempt 1, but the Worker disappeared before "
+                "reporting it. Press Enter to start a replacement Worker",
+            )
+            with console.status(
+                "Replacement Worker running Temporal's retry with the same key..."
+            ):
+                await services.start_worker()
+                result = await asyncio.wait_for(
+                    handle.result(), timeout=_DEMO_TIMEOUT_SECONDS
+                )
+        elif not simulate_stripe_timeout:
+            with console.status(
+                "Resuming at the saved next action; no repeated questions..."
+            ):
+                await services.start_worker()
+                await handle.signal(RefundWorkflow.release)
+                result = await asyncio.wait_for(
+                    handle.result(), timeout=_DEMO_TIMEOUT_SECONDS
+                )
         if result.status == "denied":
             completed = True
             _show(
