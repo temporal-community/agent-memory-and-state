@@ -90,6 +90,10 @@ model.
 - Live model mode supports Anthropic and OpenAI. Record an explicit provider in
   Workflow input so replacement Workers cannot switch providers based on key
   availability.
+- Build the Anthropic and OpenAI clients with `max_retries=0` and a timeout
+  shorter than the `agent_step` start-to-close timeout, and keep
+  `stripe.max_network_retries = 0`. The Temporal Activity retry policy is the
+  only retry layer, so every retry is visible in Temporal.
 - Never print, commit, or expose values from `.env` or API-key environment
   variables.
 - Do not run a real-model or Stripe test-mode rehearsal unless the task calls
@@ -109,13 +113,15 @@ model.
 
 ## Verification
 
-Install development and terminal dependencies with:
+Install development and terminal dependencies with `make setup`, which runs:
 
 ```bash
 uv sync --extra dev --extra tui
 ```
 
-Before committing a change, run:
+A plain `uv sync` removes both extras, including Rich for the stage view.
+
+Before committing a change, run `make test` and `make lint`, or:
 
 ```bash
 uv run --extra dev pytest -q
@@ -123,7 +129,8 @@ uv run --extra dev ruff check .
 uv run --extra dev ruff format --check .
 ```
 
-Changes to stage copy or control flow also require a complete offline rehearsal:
+Changes to stage copy or control flow also require a complete offline rehearsal
+(`make run`):
 
 ```bash
 uv run refund-demo stage
@@ -138,6 +145,11 @@ only at 128.
 
 - Keep `README.md`, `docs/TALK_10_MIN.md`, `docs/CONCEPTS.md`, and
   `docs/REFUND_DEMO.md` aligned when the story or stage flow changes.
+- Each `Makefile` recipe is the raw command shown beside it in the README's
+  Make targets table. Change both together, and keep `make reset` from
+  deleting files or stopping servers.
+- Update the README's `Last verified` line only for runs that actually
+  happened, and name what was not re-run.
 - `scripts/render_demo_frames.py` generates deterministic HTML frames. Generated
   raster screenshots, GIFs, and videos are separate artifacts; do not claim
   they were updated unless they were regenerated and visually inspected.

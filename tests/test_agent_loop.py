@@ -256,6 +256,38 @@ def test_anthropic_step_maps_tool_and_decision(monkeypatch) -> None:
     assert step.question_id == "damage"
 
 
+def test_model_clients_leave_every_retry_to_temporal(monkeypatch) -> None:
+    from refund_agent import activities
+
+    # Both SDKs retry inside the call by default, where Temporal can't see it.
+    # The clients disable that, and their timeout must end before agent_step's
+    # 60 s start_to_close_timeout in workflow.py so Temporal sees the failure.
+    monkeypatch.delenv("LOG_MODEL_USAGE", raising=False)
+    monkeypatch.setenv("OPENAI_MODEL", "test-model")
+    monkeypatch.setenv("ANTHROPIC_MODEL", "test-claude")
+    built: dict[str, dict] = {}
+
+    def fake_openai(**kwargs):
+        built["openai"] = kwargs
+        return _FakeClient([_FakeCall("lookup_order", '{"order_id": "o1"}')])
+
+    def fake_anthropic(**kwargs):
+        built["anthropic"] = kwargs
+        return _FakeAnthropicClient(
+            [_FakeAnthropicBlock("lookup_order", {"order_id": "o1"})]
+        )
+
+    monkeypatch.setattr(activities, "OpenAI", fake_openai)
+    monkeypatch.setattr(activities, "Anthropic", fake_anthropic)
+    activities._openai_step(_request(8000), [], "key")
+    activities._anthropic_step(_request(8000), [], "key")
+
+    assert set(built) == {"openai", "anthropic"}
+    for kwargs in built.values():
+        assert kwargs["max_retries"] == 0
+        assert 0 < kwargs["timeout"] < 60
+
+
 # ---------------------------------------------------------------------------
 # COST: opt-in token usage log and its summary.
 # ---------------------------------------------------------------------------

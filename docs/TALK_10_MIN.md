@@ -41,7 +41,8 @@ that the reasoning turn was live.
 
 ## Before going on stage
 
-- Run `uv sync --extra tui` and one complete offline rehearsal.
+- Run `make setup` (`uv sync --extra dev --extra tui`) and one complete
+  offline rehearsal (`make run`).
 - Confirm `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL`, and a Stripe **test-mode** key
   are available if using the fully live command.
 - Have a local Temporal dev server running before the talk to remove startup

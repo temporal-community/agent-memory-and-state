@@ -21,6 +21,15 @@ The durable agent runs the same steps as a Temporal Workflow. A new Worker
 rebuilds the loop from Event History and resumes at `issue refund` without
 repeating a question.
 
+![The durable demo's stage screen right after its Temporal Worker was killed. The left pane, Temporal Worker, reads WORKER GONE: its in-memory loop is gone, and Temporal still has the saved loop. The right pane, What Survives, shows what was read from Temporal just now: customer answers 2, completed lookups 2, next action issue refund. Below it, the offline ledger (Stripe stand-in) shows payment PAID and refund none.](assets/durable-saved.png)
+
+**Last verified: 2026-09-30.** One offline `uv run refund-demo stage` run, in
+which the Worker was killed at `issue refund` and the new Worker completed the
+refund in the offline ledger; one measured live-model pass on GPT-5.6 Luna
+(offline ledger, 4 model calls, 2,845 tokens, $0.0009); and the offline tests
+and lint. Not re-run on this date: `--real` (Stripe test mode). The Claude path
+has not been run.
+
 There is no agent framework. The point is to make the boundary between context,
 memory, and authoritative state visible.
 
@@ -62,16 +71,22 @@ memory, and authoritative state visible.
 
 | Video | What it shows |
 | --- | --- |
-| **Temporal & AI Demos: Agent Memory & State** (link added after publish) | An agent is killed one step before a refund. The naive agent loses the customer's answers; the durable loop resumes at `issue refund`. It also covers why Event History grows, and when to use a claim check or continue-as-new. |
+| **Temporal & AI Series: Agent Memory & State** (link added after publish) | An agent is killed one step before a refund. The naive agent loses the customer's answers; the durable loop resumes at `issue refund`. It also covers why Event History grows, and when to use a claim check or continue-as-new. |
 
+Part of the **Temporal & AI Series** playlist (link added after publish).
 Chapters: Hook · The problem · Demo · How memory and execution state relate ·
 Where Temporal fits · Pros, cons, and gotchas · Cost to run · Takeaways and
 resources. Timestamps are added after the final cut. The video's key moment is
 written down in [The money moment](#the-money-moment), and the full cost is in
 [Cost to run](#cost-to-run).
 
+**As presented.** The September 2026 talk ran the code tagged
+[`as-presented-2026-09`](https://github.com/temporal-community/temporal-ai-agent-memory-state-stripe/tree/as-presented-2026-09).
+`main` keeps moving; link the tag when you cite the talk.
+
 One runnable next step kills the Worker while the refund Activity is in flight.
-It runs offline with no model calls (0 tokens, $0):
+It runs offline with no model calls (0 tokens, $0), and `make failure` runs
+the same command:
 
 ```bash
 uv run refund-demo stage --simulate-stripe-timeout
@@ -81,9 +96,9 @@ Further reading: [Temporal docs](https://docs.temporal.io), the
 [Python SDK](https://github.com/temporalio/sdk-python), and
 [Stripe idempotent requests](https://docs.stripe.com/api/idempotent_requests).
 
-<!-- TODO before publishing: video URL with UTM, blog post URL, related videos
-(human-in-the-loop, multi-agent handoffs). Add Temporal Cloud credits only once
-a code and amount are confirmed. -->
+<!-- TODO before publishing: video URL with UTM, Temporal & AI Series playlist
+URL, blog post URL, related videos (human-in-the-loop, multi-agent handoffs).
+Add Temporal Cloud credits only once a code and amount are confirmed. -->
 
 ## The boundary that matters
 
@@ -199,6 +214,14 @@ replacement Worker rebuilds `working_memory` by replaying Event History. The
 [full sketch](docs/ARCHITECTURE.md#the-agent-loop-is-ordinary-python) adds
 timeouts, retry policies, and a side-by-side with a plain in-process loop.
 
+**Temporal owns retries.** The Anthropic and OpenAI clients are built with
+`max_retries=0`, because both SDKs otherwise retry inside the call, where
+Temporal can't see it. A 429, a 5xx, a connection error, or the 45-second client
+timeout fails that `agent_step` attempt, and its retry policy (up to 5 attempts
+per model turn, each inside a 60-second Activity timeout) tries again. Temporal
+Web shows the attempt count and last failure. Other 4xx errors fail the turn
+without a retry. The Stripe calls also set `max_network_retries = 0`.
+
 ## Run the guided demo
 
 Prerequisites: Python 3.11 or newer, the
@@ -207,6 +230,8 @@ Install the project, test tools, and Rich terminal UI, then create `.env` from
 the example without overwriting one you already have:
 
 ```bash
+git clone https://github.com/temporal-community/temporal-ai-agent-memory-state-stripe.git
+cd temporal-ai-agent-memory-state-stripe
 uv sync --extra dev --extra tui
 test -e .env || cp .env.example .env
 ```
@@ -220,6 +245,22 @@ prompt:
 ```bash
 uv run refund-demo stage
 ```
+
+### Make targets
+
+The Makefile wraps the same commands. `make` alone lists the targets, and
+`make -n <target>` prints a target's command without running it.
+
+| Target | Runs | Notes |
+| --- | --- | --- |
+| `make setup` | `uv sync --extra dev --extra tui` | Keeps both extras; a plain `uv sync` removes the Rich stage view |
+| `make run` | `uv run refund-demo stage` | The key-free path: fixed policy, offline ledger, 0 model calls |
+| `make run-real` | `uv run refund-demo stage --real` | Needs a Stripe `sk_test_` or `rk_test_` key; creates Stripe test objects |
+| `make failure` | `uv run refund-demo stage --simulate-stripe-timeout` | Offline. The Worker is killed while `issue_refund` is in flight, and a new Worker runs attempt 2 |
+| `make reset` | `uv run refund-demo cleanup`, then prints the manual reset steps | Refunds only leftover demo test payments, and only with a Stripe test key. Deletes and stops nothing |
+| `make test` | `uv run --extra dev pytest -q` | Offline |
+| `make lint` | `uv run --extra dev ruff check .` and `uv run --extra dev ruff format --check .` | Offline |
+| `make usage` | `uv run refund-demo usage` | Sums a pass logged with `LOG_MODEL_USAGE=1`, or names the newest stage log |
 
 ### Choose the stage path
 
@@ -257,12 +298,11 @@ return again."
 The durable Worker is killed at the same next action. With nothing running,
 Temporal still has both answers, both lookups, and
 `Next action: issue refund`, and the stage reads them back from Event History
-on the `WORKER GONE` frame. The new Worker finishes with
-`NO REPEATED QUESTIONS`, `NO LOOP RESTART`, and "Your refund is complete."
+on the `WORKER GONE` frame ([shown at the top](#agent-memory-and-state)). The
+new Worker finishes with `NO REPEATED QUESTIONS`, `NO LOOP RESTART`, and "Your
+refund is complete."
 
 In the video: "The Worker is disposable; the loop is not."
-
-![The durable demo right after its Worker was killed. The left pane, Temporal Worker, reads WORKER GONE: its in-memory loop is gone, and Temporal still has the saved loop. The right pane, What Survives, shows Temporal, read from Temporal just now: customer answers 2, completed lookups 2, next action issue refund; and the offline ledger (Stripe stand-in): payment paid, refund none.](assets/durable-saved.png)
 
 For proof beyond the stage screen, [Temporal Web](docs/TEMPORAL_WEB.md#what-to-check-at-each-frame)
 shows the Workflow still Running during `WORKER GONE` and no repeated
