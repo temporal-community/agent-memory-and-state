@@ -8,6 +8,7 @@ import json
 import os
 import signal
 import uuid
+from pathlib import Path
 from typing import Any
 
 import stripe
@@ -17,7 +18,9 @@ from temporalio.service import RPCError, RPCStatusCode
 from refund_agent.fake_stripe import find_refund
 from refund_agent.models import RefundRequest, RefundResult
 from refund_agent.settings import (
+    MODEL_USAGE_FILE,
     load_env_file,
+    state_dir,
     task_queue,
     temporal_address,
     temporal_namespace,
@@ -432,6 +435,138 @@ async def _stage(args: argparse.Namespace) -> None:
         print(f"STAGE | {error}")
 
 
+# COST: USD per 1M tokens. Reasoning is billed as output and is already inside
+# output_tokens, so it has no separate price.
+_LIST_PRICES_DATE = "2026-09-29"
+_LIST_PRICES = {
+    "claude-sonnet-4-6": {
+        "uncached_input": 3.00,
+        "cached_input": 0.30,
+        "cache_write": 3.75,
+        "output": 15.00,
+    },
+    "gpt-5.6-luna": {
+        "uncached_input": 0.20,
+        "cached_input": 0.02,
+        "cache_write": 0.25,
+        "output": 1.20,
+    },
+}
+_USAGE_LABELS = {
+    "uncached_input": "uncached input",
+    "cached_input": "cached input",
+    "cache_write": "cache writes",
+    "output": "output",
+}
+
+
+def _usage_totals(
+    records: list[dict[str, Any]],
+) -> dict[tuple[str, str], dict[str, int]]:
+    """Sum model-usage.jsonl records per (provider, model)."""
+
+    totals: dict[tuple[str, str], dict[str, int]] = {}
+    for record in records:
+        key = (str(record.get("provider")), str(record.get("model")))
+        total = totals.setdefault(
+            key, dict.fromkeys(("calls", *_USAGE_LABELS, "reasoning"), 0)
+        )
+        # input_tokens counts every prompt token, so remove the cached parts.
+        cached = int(record.get("cached_input_tokens", 0))
+        cache_write = int(record.get("cache_write_tokens", 0))
+        total["calls"] += 1
+        total["uncached_input"] += (
+            int(record.get("input_tokens", 0)) - cached - cache_write
+        )
+        total["cached_input"] += cached
+        total["cache_write"] += cache_write
+        total["output"] += int(record.get("output_tokens", 0))
+        total["reasoning"] += int(record.get("reasoning_tokens", 0))
+    return totals
+
+
+def _usage_dollars(total: dict[str, int], prices: dict[str, float]) -> float:
+    return sum(total[name] * prices[name] for name in _USAGE_LABELS) / 1_000_000
+
+
+def _usage(args: argparse.Namespace) -> None:
+    directory = Path(args.state_dir) if args.state_dir else state_dir()
+    path = directory / MODEL_USAGE_FILE
+    if (args.input_price is None) != (args.output_price is None):
+        print("MODEL USAGE | pass --input-price and --output-price together")
+        return
+    if not path.exists():
+        print(f"MODEL USAGE | no usage log at {path}")
+        stage_logs = sorted(
+            directory.glob(f"stage-*/{MODEL_USAGE_FILE}"),
+            key=lambda log: log.stat().st_mtime,
+        )
+        if stage_logs:
+            print(
+                "MODEL USAGE | newest stage run: refund-demo usage --state-dir "
+                f"{stage_logs[-1].parent}"
+            )
+        else:
+            print("MODEL USAGE | set LOG_MODEL_USAGE=1, then run a live-model pass")
+        return
+
+    records: list[dict[str, Any]] = []
+    unreadable = 0
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            records.append(json.loads(line))
+        except json.JSONDecodeError:
+            unreadable += 1
+    print(f"MODEL USAGE | {path}")
+    print("MODEL USAGE | tokens are measured: each call's usage as the API reported it")
+    if unreadable:
+        print(f"MODEL USAGE | skipped {unreadable} unreadable lines")
+
+    for (provider, model), total in _usage_totals(records).items():
+        if args.input_price is not None:
+            prices: dict[str, float] | None = {
+                "uncached_input": args.input_price,
+                "cached_input": args.input_price,
+                "cache_write": args.input_price,
+                "output": args.output_price,
+            }
+            price_note = (
+                "your --input-price/--output-price; cached input and cache "
+                "writes priced at the input price"
+            )
+        else:
+            prices = _LIST_PRICES.get(model)
+            price_note = f"list prices as of {_LIST_PRICES_DATE}"
+        print(f"\n{provider}:{model}")
+        print(f"  {'model calls':<15}{total['calls']:>10,}")
+        for name, label in _USAGE_LABELS.items():
+            cost = (
+                "" if prices is None else f"  ${total[name] * prices[name] / 1e6:.6f}"
+            )
+            print(f"  {label:<15}{total[name]:>10,} tokens{cost}")
+        print(
+            f"  {'reasoning':<15}{total['reasoning']:>10,} tokens  "
+            "(inside output, not added again)"
+        )
+        tokens = sum(total[name] for name in _USAGE_LABELS)
+        if prices is None:
+            print(f"  {'total':<15}{tokens:>10,} tokens")
+            print(
+                f"  dollars: no list price for {model}; pass --input-price and "
+                "--output-price (USD per 1M tokens)"
+            )
+            continue
+        print(
+            f"  {'total':<15}{tokens:>10,} tokens  ${_usage_dollars(total, prices):.6f}"
+        )
+        rates = ", ".join(
+            f"{_USAGE_LABELS[name]} ${prices[name]:.2f}" for name in _USAGE_LABELS
+        )
+        print(f"  prices: {price_note}, USD per 1M tokens: {rates}")
+
+
 def _kill_worker() -> None:
     path = worker_pid_file()
     if not path.exists():
@@ -573,6 +708,22 @@ def _parser() -> argparse.ArgumentParser:
     commands.add_parser(
         "cleanup", help="refund leftover demo test charges in Stripe test mode"
     )
+
+    usage = commands.add_parser(
+        "usage",
+        help="sum logged model tokens and dollars (needs LOG_MODEL_USAGE=1)",
+    )
+    usage.add_argument(
+        "--state-dir",
+        help="folder holding model-usage.jsonl (default: DEMO_STATE_DIR); a "
+        "stage run writes to .demo-state/stage-<token>",
+    )
+    usage.add_argument(
+        "--input-price", type=float, help="USD per 1M input tokens, for other models"
+    )
+    usage.add_argument(
+        "--output-price", type=float, help="USD per 1M output tokens, for other models"
+    )
     return parser
 
 
@@ -604,6 +755,9 @@ def main() -> None:
     args = _parser().parse_args()
     if args.command == "kill-worker":
         _kill_worker()
+        return
+    if args.command == "usage":
+        _usage(args)
         return
     try:
         asyncio.run(_async_main(args))

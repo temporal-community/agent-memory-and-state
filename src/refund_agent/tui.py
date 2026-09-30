@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from dataclasses import dataclass
 
 from rich import box
 from rich.console import Group
@@ -23,6 +24,7 @@ from rich.style import Style
 from rich.table import Table
 from rich.text import Text
 from temporalio.client import Client
+from temporalio.converter import DataConverter
 from temporalio.service import RPCError
 
 from refund_agent.cli import _event_rows, _phase
@@ -33,6 +35,59 @@ from refund_agent.settings import (
     temporal_namespace,
     worker_pid_file,
 )
+
+# Bounds the Worker-gone history read so a stuck call cannot hang a stage cue.
+_HISTORY_READ_TIMEOUT_SECONDS = 3
+
+_LOOKUP_LABELS = {
+    "lookup_order": "Found order",
+    "lookup_customer_history": "Checked refund history",
+    "check_refund_policy": "Checked refund policy",
+}
+
+
+@dataclass(frozen=True)
+class DemoSetup:
+    """What this stage run really uses, so every frame can say so on screen."""
+
+    real_stripe: bool = False
+    model_provider: str | None = None
+
+    @property
+    def effect_heading(self) -> str:
+        # Never label the offline ledger as plain "Stripe".
+        if self.real_stripe:
+            return "STRIPE (test mode)"
+        return "OFFLINE LEDGER (Stripe stand-in)"
+
+    @property
+    def _effect_note(self) -> str:
+        return "Stripe test mode" if self.real_stripe else "offline ledger (no Stripe)"
+
+    @property
+    def naive_line(self) -> str:
+        return f"Scripted steps · {self._effect_note}"
+
+    @property
+    def durable_line(self) -> str:
+        if self.model_provider:
+            policy = f"Live model ({self.model_provider})"
+        else:
+            policy = "Fixed policy (no LLM)"
+        return f"{policy} · sample lookups · {self._effect_note}"
+
+
+OFFLINE_SETUP = DemoSetup()
+
+
+def _demo_header(title: str, subtitle: str, setup_line: str) -> Text:
+    """Title, one-line subtitle, and the dim disclosure of what is scripted."""
+
+    header = Text()
+    header.append(f"{title}\n", style="bold")
+    header.append(f"{subtitle}\n", style="dim")
+    header.append(setup_line, style="dim italic")
+    return header
 
 
 def _worker_alive() -> tuple[bool, int | None]:
@@ -141,19 +196,14 @@ def _stage_agent_panel(
     body = Text()
     if not alive:
         body.append("WORKER GONE\n\n", style="bold red")
-        body.append(
-            "Its current conversation and working view disappeared.\n\n",
-            style="red",
-        )
-        body.append("Its live copy of the agent loop is gone.", style="red")
-        return Panel(body, title="THIS WORKER", border_style="red")
+        body.append("Its in-memory loop is gone.\n\n", style="red")
+        # The arrow sends the eye to the right pane, where the proof is.
+        body.append("Temporal still has the saved loop. →", style="red")
+        return Panel(body, title="TEMPORAL WORKER", border_style="red")
 
     if recovered:
         body.append("NO REPEATED QUESTIONS\nNO LOOP RESTART\n\n", style="bold green")
-        body.append(
-            "Temporal reconnected this agent to Nyghtowl's existing work.\n\n",
-            style="green",
-        )
+        body.append("Same loop, rebuilt from Temporal.\n\n", style="green")
         body.append("AGENT\n", style="bold cyan")
         normalized_status = (refund_status or "unknown").lower()
         if normalized_status == "succeeded":
@@ -170,17 +220,17 @@ def _stage_agent_panel(
             )
             body.append(f"  Stripe status: {normalized_status.upper()}.", style="red")
             border_style = "red"
-        return Panel(body, title="RELOADED AGENT", border_style=border_style)
+        return Panel(body, title="NEW TEMPORAL WORKER", border_style=border_style)
 
     if loop_steps or pending_question:
         _append_loop_steps(body, loop_steps or [], pending_question=pending_question)
-        return Panel(body, title="THIS WORKER", border_style="cyan")
+        return Panel(body, title="TEMPORAL WORKER", border_style="cyan")
 
     view = _read_agent_view(workflow_id)
     if not view:
         body.append("Welcome back, Nyghtowl\n\n", style="bold cyan")
         body.append("How can I help?", style="dim")
-        return Panel(body, title="THIS WORKER", border_style="cyan")
+        return Panel(body, title="TEMPORAL WORKER", border_style="cyan")
 
     context = view.get("context") or {}
     observations = view.get("observations") or []
@@ -191,7 +241,7 @@ def _stage_agent_panel(
 
     body.append("YOU\n", style="bold yellow")
     body.append(f"  {context.get('reason') or 'Please refund this order'}\n\n")
-    body.append("THE AGENT FOUND\n", style="bold blue")
+    body.append("THE AGENT LOOKED UP\n", style="bold blue")
     friendly_tools = {
         "lookup_order": "Order details",
         "lookup_customer_history": "Customer history",
@@ -219,7 +269,7 @@ def _stage_agent_panel(
             rationale = rationale[:177].rstrip() + "..."
         body.append("\nWHY\n", style="bold yellow")
         body.append(f"  {rationale}\n", style="yellow")
-    return Panel(body, title="THIS WORKER", border_style="cyan")
+    return Panel(body, title="TEMPORAL WORKER", border_style="cyan")
 
 
 def _mark(done: bool) -> str:
@@ -239,7 +289,7 @@ def _append_loop_steps(
         kind = step.get("kind")
         if kind == "answer":
             label = {
-                "item_opened": "Opened",
+                "item_opened": "Package opened",
                 "damage": "Damage",
             }.get(step.get("question_id"), "Answer")
             body.append(f"  ✓ {label}: {step.get('result')}\n", style="green")
@@ -349,14 +399,24 @@ def _stage_system_view(
     refund_step_completed: bool,
     denied: bool = False,
     loop_steps: list[dict[str, str]] | None = None,
+    loop_source: str | None = None,
+    setup: DemoSetup = OFFLINE_SETUP,
 ) -> Panel:
-    """Render the durable side without SDK or systems-design vocabulary."""
+    """Render the durable side without SDK or systems-design vocabulary.
+
+    `loop_source` labels where the loop counts came from: "history" means they
+    were read from Temporal for this frame, and "cached" means that read failed
+    and the counts are the earlier reading taken while the Worker was running.
+    `None` is the frame before the kill, while the demo holds the loop before
+    Stripe.
+    """
 
     body = Text()
+    effect_heading = setup.effect_heading
     if status is None:
         body.append("TEMPORAL\n", style="bold green")
         body.append("  No refund request yet.\n\n", style="dim")
-        body.append("STRIPE\n", style="bold green")
+        body.append(f"{effect_heading}\n", style="bold green")
         body.append("  Payment: PAID\n")
         body.append("  Refund: none\n", style="dim")
         return Panel(body, title="WHAT SURVIVES", border_style="green")
@@ -365,7 +425,7 @@ def _stage_system_view(
         body.append("TEMPORAL\n", style="bold green")
         body.append("  This request is complete.\n")
         body.append("  No refund step was started.\n\n")
-        body.append("STRIPE\n", style="bold green")
+        body.append(f"{effect_heading}\n", style="bold green")
         body.append("  Payment: PAID\n")
         body.append("  Refund: none\n", style="dim")
         return Panel(body, title="WHAT SURVIVES", border_style="green")
@@ -375,16 +435,24 @@ def _stage_system_view(
         str(refund.get("status") or "unknown").lower() if refund is not None else None
     )
     if refund_step_completed and refund_status == "succeeded":
-        body.append("  Agent loop completed after recovery.\n")
+        body.append("  Finished by the new Worker.\n")
     elif refund_step_completed:
-        body.append("  Stripe response recorded after recovery.\n")
+        body.append("  Stripe's reply recorded by the new Worker.\n")
     elif refund is not None:
         body.append("  Refund step is still open.\n")
         body.append("  The Worker has not reported back.\n")
     else:
         answers = sum(1 for step in loop_steps or [] if step.get("kind") == "answer")
         lookups = sum(1 for step in loop_steps or [] if step.get("kind") == "tool")
-        body.append("  Agent loop saved.\n")
+        # One label per list. "Read from Temporal just now" is honest only
+        # because the Worker-gone frame reads Event History, not a cached Query.
+        if loop_source == "history":
+            body.append("  Read from Temporal just now:\n", style="green")
+        elif loop_source == "cached":
+            body.append("  Could not re-read Temporal.\n", style="yellow")
+            body.append("  Showing the earlier reading:\n", style="yellow")
+        else:
+            body.append("  Saved so far:\n")
         body.append(f"  Customer answers: {answers}\n")
         body.append(f"  Completed lookups: {lookups}\n")
         ready = next(
@@ -393,30 +461,98 @@ def _stage_system_view(
         )
         if ready:
             body.append(f"  Next action: {ready.get('result')}\n", style="bold green")
+            if loop_source is None:
+                # The demo-only release Signal wait (RefundWorkflow.run).
+                body.append("  (demo pauses here, before Stripe)\n", style="dim")
     if pending_attempt is not None:
         body.append(f"  Current attempt: {pending_attempt}\n")
 
-    body.append("\nSTRIPE\n", style="bold green")
+    body.append(f"\n{effect_heading}\n", style="bold green")
     body.append("  Payment: PAID\n")
     if refund is None:
-        body.append("  Refund: none yet.\n", style="dim")
+        body.append("  Refund: none\n", style="dim")
     elif refund_status == "succeeded":
         calls = int(refund.get("calls", 1))
-        body.append("  Refund succeeded.\n")
+        body.append("  Refund: SUCCEEDED\n")
+        # Show call counts only when a retry made more than one call.
         if calls > 1:
             body.append(f"\n  {calls} CALLS  →  1 REFUND\n", style="bold green")
             body.append("  Same operation. No duplicate.\n", style="green")
-        else:
-            body.append("  1 call  →  1 refund\n")
-            if not refund_step_completed:
-                body.append(
-                    "  It succeeded before the Worker reported back.\n",
-                    style="yellow",
-                )
+        elif not refund_step_completed:
+            body.append(
+                "  It succeeded before the Worker reported back.\n",
+                style="yellow",
+            )
     else:
-        body.append(f"  Refund status: {refund_status.upper()}.\n", style="yellow")
-        body.append("  Stripe has not confirmed completion.\n", style="yellow")
+        body.append(f"  Refund: {refund_status.upper()}\n", style="yellow")
+        body.append("  Stripe has not confirmed it yet.\n", style="yellow")
     return Panel(body, title="WHAT SURVIVES", border_style="green")
+
+
+async def _loop_steps_from_history(
+    history, converter: DataConverter
+) -> list[dict[str, str]]:
+    """Rebuild the stage loop summary from Temporal's recorded events.
+
+    The Temporal service serves this history with no Worker running. Customer
+    answers are Signals, lookups are completed Activities, and the next action
+    follows from the agent's recorded decision, as in RefundWorkflow.run.
+    """
+
+    activity_names: dict[int, str] = {}
+    answered: set[str] = set()
+    steps: list[dict[str, str]] = []
+    recommendation: str | None = None
+    approved = refund_completed = False
+    for event in history.events:
+        kind = event.WhichOneof("attributes")
+        if kind == "workflow_execution_signaled_event_attributes":
+            attributes = event.workflow_execution_signaled_event_attributes
+            if attributes.signal_name == "approve":
+                approved = True
+            elif attributes.signal_name == "answer_question":
+                question_id, answer = await converter.decode(attributes.input.payloads)
+                if question_id not in answered:
+                    answered.add(question_id)
+                    steps.append(
+                        {
+                            "kind": "answer",
+                            "question_id": str(question_id),
+                            "result": str(answer),
+                        }
+                    )
+        elif kind == "activity_task_scheduled_event_attributes":
+            attributes = event.activity_task_scheduled_event_attributes
+            activity_names[event.event_id] = attributes.activity_type.name
+        elif kind == "activity_task_completed_event_attributes":
+            attributes = event.activity_task_completed_event_attributes
+            name = activity_names.get(attributes.scheduled_event_id, "")
+            if name in _LOOKUP_LABELS:
+                steps.append(
+                    {
+                        "kind": "tool",
+                        "tool": name,
+                        "label": _LOOKUP_LABELS[name],
+                        "result": "done",
+                    }
+                )
+            elif name == "agent_step":
+                [step] = await converter.decode(attributes.result.payloads)
+                if step.get("action") == "decide":
+                    recommendation = str(step.get("recommendation") or "escalate")
+            elif name == "issue_refund":
+                refund_completed = True
+    # Mirror RefundWorkflow.run: deny ends the run, approve goes straight to the
+    # refund, and anything else is an escalation that waits for the approve Signal.
+    if (
+        recommendation not in (None, "deny")
+        and not refund_completed
+        and (recommendation == "approve" or approved)
+    ):
+        steps.append(
+            {"kind": "ready", "label": "Next action", "result": "issue refund"}
+        )
+    return steps
 
 
 async def _stage_system_panel(
@@ -424,8 +560,15 @@ async def _stage_system_panel(
     workflow_id: str,
     *,
     loop_steps: list[dict[str, str]] | None = None,
+    loop_from_history: bool = False,
+    setup: DemoSetup = OFFLINE_SETUP,
 ) -> Panel:
-    """Read authoritative records and render the general-audience view."""
+    """Read authoritative records and render the general-audience view.
+
+    With `loop_from_history`, the loop counts come from Temporal's history for
+    this frame instead of `loop_steps`, which were cached by an earlier Query.
+    A Query needs a running Worker; reading history does not.
+    """
 
     handle = client.get_workflow_handle(workflow_id)
     try:
@@ -436,11 +579,25 @@ async def _stage_system_panel(
             refund=None,
             pending_attempt=None,
             refund_step_completed=False,
+            setup=setup,
         )
 
     status = description.status.name if description.status else "UNKNOWN"
-    history = await handle.fetch_history()
-    rows, _ = _event_rows(history)
+    loop_source = None
+    if loop_from_history:
+        try:
+            history = await asyncio.wait_for(
+                handle.fetch_history(), timeout=_HISTORY_READ_TIMEOUT_SECONDS
+            )
+            loop_steps = await _loop_steps_from_history(history, client.data_converter)
+            loop_source = "history"
+        except Exception:
+            # Keep the frame up, but label the counts as the earlier reading.
+            history = None
+            loop_source = "cached"
+    else:
+        history = await handle.fetch_history()
+    rows, _ = _event_rows(history) if history is not None else ([], {})
     refund_step_completed = any(
         row.get("event") == "completed" and row.get("name") == "issue_refund"
         for row in rows
@@ -453,6 +610,8 @@ async def _stage_system_panel(
         pending_attempt=pending_attempt,
         refund_step_completed=refund_step_completed,
         loop_steps=loop_steps,
+        loop_source=loop_source,
+        setup=setup,
     )
 
 
@@ -511,12 +670,13 @@ def _compact_columns(left: Panel, right: Panel) -> Table:
     return columns
 
 
-def _stage_build(agent: Panel, system: Panel) -> Group:
-    header = Text()
-    header.append("Demo 2: The agent loop keeps its place\n", style="bold")
-    header.append(
-        "The Worker can disappear. Completed observations and the next action survive.",
-        style="dim",
+def _stage_build(
+    agent: Panel, system: Panel, *, setup: DemoSetup = OFFLINE_SETUP
+) -> Group:
+    header = _demo_header(
+        "Demo 2: With Temporal, the agent keeps its place",
+        "Temporal keeps each answer, lookup and next step outside the Worker.",
+        setup.durable_line,
     )
     return Group(
         Panel(header, border_style="white"),

@@ -3,6 +3,7 @@ import pytest
 from refund_agent.settings import (
     agent_view_path,
     effect_restart_window_seconds,
+    model_usage_path,
     validate_stripe_key,
 )
 
@@ -36,3 +37,29 @@ def test_effect_restart_window_rejects_invalid_values(value, monkeypatch) -> Non
 
     with pytest.raises(RuntimeError, match="finite number"):
         effect_restart_window_seconds()
+
+
+@pytest.mark.parametrize("value", [None, "", "0", "false", "No"])
+def test_model_usage_log_is_off_unless_enabled(value, tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
+    if value is None:
+        monkeypatch.delenv("LOG_MODEL_USAGE", raising=False)
+    else:
+        monkeypatch.setenv("LOG_MODEL_USAGE", value)
+
+    assert model_usage_path() is None
+
+
+@pytest.mark.parametrize("value", ["1", "true", "YES"])
+def test_model_usage_log_lands_in_state_directory(value, tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("LOG_MODEL_USAGE", value)
+
+    assert model_usage_path() == tmp_path / "model-usage.jsonl"
+
+
+def test_model_usage_log_rejects_unclear_values(monkeypatch) -> None:
+    monkeypatch.setenv("LOG_MODEL_USAGE", "maybe")
+
+    with pytest.raises(RuntimeError, match="LOG_MODEL_USAGE"):
+        model_usage_path()

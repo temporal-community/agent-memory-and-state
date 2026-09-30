@@ -13,6 +13,8 @@ import json
 import os
 import time
 from dataclasses import asdict
+from datetime import UTC, datetime
+from pathlib import Path
 
 import anthropic
 import openai
@@ -35,6 +37,7 @@ from refund_agent.models import (
 from refund_agent.settings import (
     agent_view_path,
     effect_restart_window_seconds,
+    model_usage_path,
     state_dir,
     validate_stripe_key,
 )
@@ -362,6 +365,65 @@ def _selected_model_provider(request: RefundRequest) -> str | None:
     return None
 
 
+def _usage_count(source: object, name: str) -> int:
+    return int(getattr(source, name, None) or 0)
+
+
+def _record_usage(
+    path: Path | None, provider: str, model: str, usage: object | None
+) -> None:
+    """COST: append one model call's token counts when LOG_MODEL_USAGE is on.
+
+    Only counts are written, never prompt text or keys. input_tokens counts every
+    prompt token, cached or not. output_tokens already includes reasoning.
+    """
+
+    if path is None or usage is None:
+        return
+    if provider == "openai":
+        # OpenAI input_tokens already includes cached and cache-write tokens.
+        input_details = getattr(usage, "input_tokens_details", None)
+        cached = _usage_count(input_details, "cached_tokens")
+        cache_write = _usage_count(input_details, "cache_write_tokens")
+        input_tokens = _usage_count(usage, "input_tokens")
+        output_details = getattr(usage, "output_tokens_details", None)
+        reasoning = _usage_count(output_details, "reasoning_tokens")
+    else:
+        # Anthropic input_tokens excludes cache reads and writes, so add them.
+        cached = _usage_count(usage, "cache_read_input_tokens")
+        cache_write = _usage_count(usage, "cache_creation_input_tokens")
+        input_tokens = _usage_count(usage, "input_tokens") + cached + cache_write
+        output_details = getattr(usage, "output_tokens_details", None)
+        reasoning = _usage_count(output_details, "thinking_tokens")
+    output_tokens = _usage_count(usage, "output_tokens")
+    record: dict[str, object] = {
+        "timestamp": datetime.now(UTC).isoformat(timespec="seconds"),
+        "provider": provider,
+        "model": model,
+        "input_tokens": input_tokens,
+        "cached_input_tokens": cached,
+        "cache_write_tokens": cache_write,
+        "output_tokens": output_tokens,
+        "reasoning_tokens": reasoning,
+    }
+    if activity.in_activity():
+        info = activity.info()
+        record["workflow_id"] = info.workflow_id
+        record["activity_attempt"] = info.attempt
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as log:
+            log.write(json.dumps(record, sort_keys=True) + "\n")
+    except OSError as error:
+        # The call is already billed; a failed log write must not retry it.
+        _line("MODEL USAGE", f"could not write {path}: {error}")
+        return
+    _line(
+        "MODEL USAGE",
+        f"{provider}:{model} input {input_tokens}, output {output_tokens}",
+    )
+
+
 def _openai_step(
     request: RefundRequest, working_memory: list[dict], api_key: str
 ) -> AgentStep:
@@ -373,6 +435,8 @@ def _openai_step(
             type="OpenAIModelMissing",
             non_retryable=True,
         )
+    # Read before the paid call, so an invalid LOG_MODEL_USAGE fails first.
+    usage_path = model_usage_path()
     # Client retries are disabled so Temporal owns every retry decision.
     client = OpenAI(api_key=api_key, max_retries=0, timeout=45.0)
     payload = json.dumps(
@@ -400,6 +464,8 @@ def _openai_step(
         ) from error
     # Connection and timeout errors are not APIStatusError, so they propagate as
     # ordinary failures that Temporal retries under the RetryPolicy.
+    # Log before parsing, so a billed response that fails to parse still counts.
+    _record_usage(usage_path, "openai", model, getattr(response, "usage", None))
 
     call = None
     for item in response.output:
@@ -447,6 +513,8 @@ def _anthropic_step(
             type="AnthropicModelMissing",
             non_retryable=True,
         )
+    # Read before the paid call, so an invalid LOG_MODEL_USAGE fails first.
+    usage_path = model_usage_path()
     tools = [
         {
             "name": tool["name"],
@@ -478,6 +546,8 @@ def _anthropic_step(
             type="AnthropicPermanentError",
             non_retryable=True,
         ) from error
+    # Log before parsing, so a billed response that fails to parse still counts.
+    _record_usage(usage_path, "anthropic", model, getattr(response, "usage", None))
 
     call = next(
         (block for block in response.content if block.type == "tool_use"),

@@ -340,8 +340,8 @@ def _process_interactive(
         {"kind": "answer", "question_id": "damage", "result": "Split seam"},
         {
             "kind": "tool",
-            "label": "Looked up order",
-            "result": "PAID",
+            "label": "Found order",
+            "result": "plush python",
         },
         {
             "kind": "tool",
@@ -353,54 +353,54 @@ def _process_interactive(
     agent["note"] = "agent chose the refund; loop position remains in this process"
 
 
-def _demo_frame(agent: dict, ledger: list, *, stage_mode: bool = False):
+def _demo_frame(
+    agent: dict,
+    ledger: list,
+    *,
+    stage_mode: bool = False,
+    setup=None,
+):
     from rich.console import Group
     from rich.panel import Panel
     from rich.text import Text
 
-    from refund_agent.tui import _compact_columns
+    from refund_agent.tui import OFFLINE_SETUP, _compact_columns, _demo_header
 
+    setup = setup or OFFLINE_SETUP
     refund_status = (
         str(ledger[-1].get("status", "succeeded")).lower() if ledger else None
     )
 
+    # General-audience copy calls this side the "agent process", never a Worker:
+    # it is not a Temporal Worker.
     left = Text()
     if "context" not in agent:
         if agent.get("_worker_gone"):
-            left.append("WORKER GONE\n\n", style="bold red")
+            left.append("PROCESS GONE\n\n", style="bold red")
             left.append(
-                "Its current conversation and working view disappeared.\n\n"
-                "Its live copy of the agent loop is gone.",
+                "It held the answers and next step.\n\nThey are gone with it.",
                 style="red",
             )
         else:
             left.append("Welcome back, Nyghtowl\n\n", style="bold cyan")
-        if agent.get("_restarted"):
-            left.append(
-                "REPLACEMENT WORKER\n"
-                "A new session has started.\n"
-                "The answers and loop position are gone.",
-                style="yellow",
-            )
-        elif not agent.get("_worker_gone"):
-            left.append("How can I help?", style="dim")
+            if agent.get("_restarted"):
+                left.append("No answers. No next step.", style="yellow")
+            else:
+                left.append("How can I help?", style="dim")
     elif agent.get("_status_checked"):
         context = agent.get("context") or {}
         amount = (context.get("amount") or 0) / 100
         left.append("YOU\n", style="bold yellow")
         left.append(f"  {agent.get('user_message', 'What happened to my refund?')}\n\n")
         left.append("AGENT\n", style="bold cyan")
-        left.append("  Let me check Stripe.\n\n")
+        left.append("  Let me check Stripe.\n")
         if agent.get("_refund_missing", not ledger):
-            left.append("ANSWER\n", style="bold yellow")
             left.append("  No refund request reached Stripe.\n", style="bold")
             left.append("  I lost your return answers.\n", style="yellow")
             left.append("  Please start the return again.\n", style="yellow")
         elif refund_status == "succeeded":
-            left.append("ANSWER\n", style="bold green")
             left.append(f"  Yes — your ${amount:.2f} refund succeeded.\n", style="bold")
         else:
-            left.append("ANSWER\n", style="bold yellow")
             left.append("  Stripe has a refund record.\n", style="bold")
             left.append(f"  Current status: {refund_status.upper()}.\n", style="yellow")
             left.append("  It is not confirmed complete.\n", style="yellow")
@@ -423,7 +423,7 @@ def _demo_frame(agent: dict, ledger: list, *, stage_mode: bool = False):
     right = Text()
     right.append("LAST ORDER\n", style="bold")
     right.append("  Plush python · $80.00\n\n")
-    right.append("STRIPE\n", style="bold green")
+    right.append(f"{setup.effect_heading}\n", style="bold green")
     right.append(f"  Payment: {agent.get('_payment_status', 'PAID')}\n")
     if not ledger:
         right.append("  Refund: none\n", style="dim")
@@ -438,73 +438,53 @@ def _demo_frame(agent: dict, ledger: list, *, stage_mode: bool = False):
         status = str(entry.get("status", "succeeded")).lower()
         right.append(f"  Status: {status}\n")
 
-    header_text = Text()
-    header_text.append("Demo 1: The agent loop starts over\n", style="bold")
-    header_text.append(
-        "The agent asks, observes, and looks things up before choosing the refund.",
-        style="dim",
+    header = Panel(
+        _demo_header(
+            "Demo 1: Without Temporal, the agent loses its place",
+            "Its answers and next step live only inside this agent process.",
+            setup.naive_line,
+        ),
+        border_style="cyan",
     )
-    header = Panel(header_text, border_style="cyan")
+    # The left pane says what is gone; this panel says what is left. Stripe's
+    # record is correct, and it never received or lost a refund request here.
     if agent.get("_worker_gone"):
         explanation = (
-            "The process-local answers and next action disappeared.\n"
-            "Stripe still correctly says PAID with no refund."
+            "Only Stripe's record: PAID, no refund.\n"
+            "That is correct. Stripe was never called."
         )
-        explanation_title = "WORKER GONE"
+        explanation_title = "WHAT'S LEFT"
     elif agent.get("_status_checked") and not ledger:
         explanation = (
-            "Stripe kept the payment record. The Worker held the answers and\n"
-            "the loop position. Both disappeared with it."
+            "Stripe's record is right: paid, no refund.\n"
+            "But Stripe never had the answers or the next step."
         )
-        explanation_title = "THE CUSTOMER RESTARTS THE LOOP"
+        explanation_title = "THE CUSTOMER STARTS OVER"
     elif any(step.get("kind") == "ready" for step in agent.get("_loop_steps") or []):
         explanation = (
-            "The agent chose its next action: issue the refund.\n"
-            "Its answers and next action exist only in this Worker."
+            "Next step: issue the refund. The demo pauses here, before Stripe.\n"
+            "The answers and next step exist only inside this process."
         )
         explanation_title = "WORK NOT SAVED"
     elif agent.get("_restarted"):
-        explanation = (
-            "Stripe correctly says PAID with no refund.\n"
-            "The answers and agent loop disappeared with the Worker."
-        )
-        explanation_title = "AFTER REPLACEMENT"
+        explanation = "It can still read Stripe.\nIt cannot see the old answers."
+        explanation_title = "FRESH START"
     else:
-        explanation = "What happens when an autonomous loop loses its Worker?"
+        explanation = "What if this agent process disappears right before the refund?"
         explanation_title = "THE QUESTION"
     why = Panel(
         explanation,
         title=explanation_title,
         border_style="yellow",
     )
-    if stage_mode and agent.get("_pending_question"):
-        controls = "Answer the agent's next question"
-    elif stage_mode and any(
-        step.get("kind") == "ready" for step in agent.get("_loop_steps") or []
-    ):
-        controls = "Press Enter to replace this Worker"
-    elif stage_mode and agent.get("_status_checked"):
-        controls = "Press Enter to compare with durable execution"
-    elif stage_mode and agent.get("_worker_gone"):
-        controls = "Press Enter to start a replacement Worker"
-    elif stage_mode and agent.get("_restarted"):
-        controls = "Ask: What happened to my refund?"
-    elif stage_mode:
-        controls = "Type your refund request at the you> prompt"
-    else:
-        controls = "Type a refund request    restart / deploy / OOM    reset    quit"
-    footer = Panel(
-        controls,
-        border_style="dim",
-    )
     if agent.get("_worker_gone"):
-        agent_panel_title = "THIS WORKER"
+        agent_panel_title = "AGENT PROCESS"
         agent_border_style = "red"
     elif agent.get("_replacement_worker") or agent.get("_restarted"):
-        agent_panel_title = "REPLACEMENT WORKER"
+        agent_panel_title = "NEW AGENT PROCESS"
         agent_border_style = "cyan"
     else:
-        agent_panel_title = "THIS AGENT SESSION"
+        agent_panel_title = "AGENT PROCESS"
         agent_border_style = "cyan"
     panes = _compact_columns(
         Panel(
@@ -514,9 +494,16 @@ def _demo_frame(agent: dict, ledger: list, *, stage_mode: bool = False):
         ),
         Panel(
             right,
-            title="ORDER + STRIPE",
+            title="WHAT SURVIVES",
             border_style="green",
         ),
+    )
+    if stage_mode:
+        # On stage the input prompt is the only cue, so nothing can disagree.
+        return Group(header, panes, why)
+    footer = Panel(
+        "Type a refund request    restart / deploy / OOM    reset    quit",
+        border_style="dim",
     )
     return Group(header, panes, why, footer)
 
