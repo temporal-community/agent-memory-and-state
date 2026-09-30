@@ -55,6 +55,20 @@ def agent_view_path(workflow_id: str) -> Path:
     return state_dir() / f"agent-view-{digest}.json"
 
 
+MODEL_USAGE_FILE = "model-usage.jsonl"
+
+
+def model_usage_path() -> Path | None:
+    """Return the opt-in token usage log, or None while LOG_MODEL_USAGE is off."""
+
+    raw_value = os.getenv("LOG_MODEL_USAGE", "").strip().lower()
+    if raw_value in ("", "0", "false", "no"):
+        return None
+    if raw_value in ("1", "true", "yes"):
+        return state_dir() / MODEL_USAGE_FILE
+    raise RuntimeError("LOG_MODEL_USAGE must be 1, true, yes, 0, false, or no")
+
+
 def effect_restart_window_seconds() -> float:
     raw_value = os.getenv("EFFECT_RESTART_WINDOW_SECONDS", "0")
     try:

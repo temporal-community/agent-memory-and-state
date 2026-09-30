@@ -27,9 +27,10 @@ model.
   refund. Only the Temporal-backed run submits the stage refund.
 - The naive agent visibly loops: ask whether the package was opened, observe the
   answer, ask what was damaged, observe the answer, look up the order and refund
-  history, then choose `issue refund` as its next action. The Worker disappears
-  before Stripe is called.
-- After naive replacement, the process-local working memory is gone, including
+  history, then choose `issue refund` as its next action. The agent process
+  disappears before Stripe is called.
+- After the agent process is replaced, the process-local working memory is
+  gone, including
   Nyghtowl's answers and the loop's next action. Stripe correctly retains
   `PAID` with no refund, but it does not own the customer intake or the loop's
   progress. Never imply Stripe received or lost a refund request at this
@@ -52,9 +53,25 @@ model.
 - Say “refund complete” only when Stripe returned `succeeded`. Render `pending`
   or any other status literally; an accepted API call is not proof of a
   completed refund.
-- General-audience stage copy should use plain language such as “Worker gone,”
-  “replacement Worker,” and “reloaded agent.” Keep SDK and event-history terms
-  in the detailed `refund-demo watch` and inspection paths.
+- General-audience stage copy uses one plain name per role. The naive side is
+  the “agent process”: `AGENT PROCESS`, `PROCESS GONE`, `NEW AGENT PROCESS`,
+  never “Worker,” because it is not a Temporal Worker. The durable side uses
+  `TEMPORAL WORKER`, `WORKER GONE`, `NEW TEMPORAL WORKER`, and “new Worker.”
+  Say “new” rather than mixing “replacement,” “reloaded,” and “new.” Keep SDK
+  and event-history terms in the detailed `refund-demo watch` and inspection
+  paths.
+- Label scripted parts on screen. Each demo header carries one dim mode line
+  (scripted steps; fixed policy or live model; sample lookups; Stripe test mode
+  or offline ledger). The reuse of the Demo 1 answers and the demo-only pause
+  before Stripe are labeled where they happen. Never label the offline ledger
+  as plain “Stripe”: its heading is `OFFLINE LEDGER (Stripe stand-in)`, and
+  `STRIPE (test mode)` only with `--real`.
+- Give each stage frame one cue, carried by the input prompt. It says literally
+  what Enter does next (“kill,” “start”) and matches the frame that follows.
+  Stage-mode frames have no footer cue panel.
+- A label that says a value was read from Temporal after the kill must be
+  backed by an Event History read, as `loop_from_history` does, never by a
+  cached Query result. Keep the cached-fallback label distinct.
 - Do not make a duplicate refund or an uncertain Stripe effect the main stage
   payoff. Contrast remembered facts with Temporal retaining completed
   observations and the autonomous loop's next action. Keep the post-effect
@@ -73,6 +90,10 @@ model.
 - Live model mode supports Anthropic and OpenAI. Record an explicit provider in
   Workflow input so replacement Workers cannot switch providers based on key
   availability.
+- Build the Anthropic and OpenAI clients with `max_retries=0` and a timeout
+  shorter than the `agent_step` start-to-close timeout, and keep
+  `stripe.max_network_retries = 0`. The Temporal Activity retry policy is the
+  only retry layer, so every retry is visible in Temporal.
 - Never print, commit, or expose values from `.env` or API-key environment
   variables.
 - Do not run a real-model or Stripe test-mode rehearsal unless the task calls
@@ -92,13 +113,15 @@ model.
 
 ## Verification
 
-Install development and terminal dependencies with:
+Install development and terminal dependencies with `make setup`, which runs:
 
 ```bash
 uv sync --extra dev --extra tui
 ```
 
-Before committing a change, run:
+A plain `uv sync` removes both extras, including Rich for the stage view.
+
+Before committing a change, run `make test` and `make lint`, or:
 
 ```bash
 uv run --extra dev pytest -q
@@ -106,24 +129,34 @@ uv run --extra dev ruff check .
 uv run --extra dev ruff format --check .
 ```
 
-Changes to stage copy or control flow also require a complete offline rehearsal:
+Changes to stage copy or control flow also require a complete offline rehearsal
+(`make run`):
 
 ```bash
 uv run refund-demo stage
 ```
 
 Verify the content is visible at the intended terminal size, not merely present
-in the Rich render tree.
+in the Rich render tree. Each pane line should fit one row at 80 columns and at
+the 100-120 column recording width; test the longest line at 100 columns, not
+only at 128.
 
 ## Documentation and generated media
 
 - Keep `README.md`, `docs/TALK_10_MIN.md`, `docs/CONCEPTS.md`, and
   `docs/REFUND_DEMO.md` aligned when the story or stage flow changes.
+- Each `Makefile` recipe is the raw command shown beside it in the README's
+  Make targets table. Change both together, and keep `make reset` from
+  deleting files or stopping servers.
+- Update the README's `Last verified` line only for runs that actually
+  happened, and name what was not re-run.
 - `scripts/render_demo_frames.py` generates deterministic HTML frames. Generated
   raster screenshots, GIFs, and videos are separate artifacts; do not claim
   they were updated unless they were regenerated and visually inspected.
 - Treat `NO REPEATED QUESTIONS`, `NO LOOP RESTART`, and the customer-facing
   result as the primary payoff. `2 CALLS → 1 REFUND` is supporting evidence
-  about effect safety in the manual technical path.
+  about effect safety in the manual technical path. Show call counts only when
+  there is more than one call (the retry paths); never show a one-call count
+  on the default path.
 - Do not commit `.env`, `.demo-state`, local Temporal databases, stage logs, or
   temporary rendering directories.

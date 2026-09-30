@@ -19,6 +19,8 @@ from refund_agent.naive_refund import _demo_frame
 from refund_agent.settings import agent_view_path
 
 WORKFLOW_ID = "demo-recovery"
+# The README frames are rendered offline, so they say "offline ledger", not Stripe.
+SETUP = tui.DemoSetup()
 DEMO_LOOP_STEPS = [
     {"kind": "answer", "question_id": "item_opened", "result": "Yes"},
     {"kind": "answer", "question_id": "damage", "result": "Split seam"},
@@ -126,13 +128,13 @@ def _render_naive_frames(output_dir: Path) -> None:
     frames = [
         (
             "01-naive-start.html",
-            _demo_frame({}, [], stage_mode=True),
-            "Naive demo — ready",
+            _demo_frame({}, [], stage_mode=True, setup=SETUP),
+            "Demo 1 — ready",
         ),
         (
             "02-naive-loop-ready.html",
-            _demo_frame(active_agent, [], stage_mode=True),
-            "Naive demo — next action chosen",
+            _demo_frame(active_agent, [], stage_mode=True, setup=SETUP),
+            "Demo 1 — next step chosen",
         ),
         (
             "03-naive-worker-gone.html",
@@ -140,8 +142,9 @@ def _render_naive_frames(output_dir: Path) -> None:
                 {"_worker_gone": True},
                 [],
                 stage_mode=True,
+                setup=SETUP,
             ),
-            "Naive demo — Worker gone",
+            "Demo 1 — agent process gone",
         ),
         (
             "04-naive-replacement.html",
@@ -149,13 +152,14 @@ def _render_naive_frames(output_dir: Path) -> None:
                 {"_restarted": True, "_replacement_worker": True},
                 [],
                 stage_mode=True,
+                setup=SETUP,
             ),
-            "Naive demo — replacement Worker",
+            "Demo 1 — new agent process",
         ),
         (
             "05-naive-loop-restarts.html",
-            _demo_frame(status_agent, [], stage_mode=True),
-            "Naive demo — loop must restart",
+            _demo_frame(status_agent, [], stage_mode=True, setup=SETUP),
+            "Demo 1 — the customer starts over",
         ),
     ]
     for filename, renderable, title in frames:
@@ -178,10 +182,12 @@ def _render_durable_frames(output_dir: Path) -> None:
                         refund=None,
                         pending_attempt=None,
                         refund_step_completed=False,
+                        setup=SETUP,
                     ),
+                    setup=SETUP,
                 ),
                 output_dir / "06-durable-start.html",
-                title="Durable demo — ready",
+                title="Demo 2 — ready",
             )
 
             view = {
@@ -213,10 +219,15 @@ def _render_durable_frames(output_dir: Path) -> None:
                         pending_attempt=None,
                         refund_step_completed=False,
                         loop_steps=DEMO_LOOP_STEPS,
+                        # The stage reads this frame from Event History after
+                        # the kill, so it shows the "just now" label.
+                        loop_source="history",
+                        setup=SETUP,
                     ),
+                    setup=SETUP,
                 ),
                 output_dir / "07-durable-lost.html",
-                title="Durable demo — Worker lost",
+                title="Demo 2 — Worker gone",
             )
 
             tui._worker_alive = lambda: (True, 5252)
@@ -234,10 +245,12 @@ def _render_durable_frames(output_dir: Path) -> None:
                         pending_attempt=None,
                         refund_step_completed=True,
                         loop_steps=DEMO_LOOP_STEPS,
+                        setup=SETUP,
                     ),
+                    setup=SETUP,
                 ),
                 output_dir / "08-durable-recovered.html",
-                title="Durable demo — recovered to one refund",
+                title="Demo 2 — new Worker finished the refund",
             )
     finally:
         tui._worker_alive = original_worker_alive

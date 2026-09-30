@@ -1,19 +1,28 @@
 import asyncio
+import io
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 pytest.importorskip("rich")
 
+from rich.console import Console
+from temporalio.api.history.v1 import History
+
+from refund_agent import tui
 from refund_agent.cli import _parser
 from refund_agent.naive_refund import _read_real_stripe_state
 from refund_agent.settings import agent_view_path
 from refund_agent.stage import (
     _ask_for_refund,
     _closing,
+    _display_path,
     _drive_naive_loop,
     _drive_naive_replacement,
+    _durable_frame,
+    _intro,
     _live_model_provider,
     _naive_ledger,
     _roles,
@@ -173,21 +182,96 @@ def test_stage_role_copy_separates_context_memory_and_state() -> None:
     assert "MEMORY" in text
     assert "remembers or looks up" in text
     assert "STATE" in text
-    assert "act and recover safely" in text
+    assert "the official record: what's done and what's next" in text
+    assert "act and recover safely" not in text
+
+
+def test_stage_intro_names_both_demos_without_jargon() -> None:
+    thesis = list(_intro().renderables)[0].renderable.plain
+
+    assert (
+        "We'll stop the agent right before it calls Stripe: first without "
+        "Temporal, then with it." in thesis
+    )
+    assert "durable" not in thesis
 
 
 def test_stage_closing_states_the_observable_outcome() -> None:
     panels = list(_closing().renderables)
 
-    assert "agent loop started over" in panels[0].renderable.plain
-    assert "reloaded agent resumed at its next action" in panels[0].renderable.plain
+    assert (
+        "Without Temporal: the customer had to start over."
+        in panels[0].renderable.plain
+    )
+    assert (
+        "With Temporal: a new Worker picked up at the saved next action."
+        in panels[0].renderable.plain
+    )
     assert "No repeated questions" not in panels[0].renderable.plain
     assert "One submitted request, one refund" not in panels[0].renderable.plain
-    assert "Stripe knows what reached Stripe" in panels[1].renderable
-    assert (
-        "Temporal remembered that the refund step was in progress"
-        in panels[1].renderable
+    assert panels[1].renderable.splitlines() == [
+        "Memory helps the agent decide.",
+        "Temporal records where the work stands.",
+        "Stripe knows whether money moved.",
+    ]
+
+
+def test_worker_gone_frame_shows_the_loop_read_from_temporal_just_now(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
+    monkeypatch.setattr(tui, "_worker_alive", lambda: (False, 4242))
+    history = History()
+    read_from: list[object] = []
+
+    async def fetch_history():
+        return history
+
+    async def describe():
+        return SimpleNamespace(
+            status=SimpleNamespace(name="RUNNING"),
+            raw_description=SimpleNamespace(pending_activities=[]),
+        )
+
+    async def steps_from_history(recorded, _converter):
+        read_from.append(recorded)
+        return [
+            {"kind": "answer", "question_id": "item_opened", "result": "Yes"},
+            {"kind": "answer", "question_id": "damage", "result": "Split seam"},
+            {"kind": "tool", "label": "Found order", "result": "done"},
+            {"kind": "tool", "label": "Checked refund history", "result": "done"},
+            {"kind": "ready", "label": "Next action", "result": "issue refund"},
+        ]
+
+    monkeypatch.setattr(tui, "_loop_steps_from_history", steps_from_history)
+    handle = SimpleNamespace(describe=describe, fetch_history=fetch_history)
+    client = SimpleNamespace(
+        get_workflow_handle=lambda _workflow_id: handle,
+        data_converter=None,
     )
+
+    frame = asyncio.run(
+        _durable_frame(
+            client,
+            "worker-gone",
+            loop_steps=[{"kind": "answer", "question_id": "stale", "result": "x"}],
+            loop_from_history=True,
+        )
+    )
+    output = io.StringIO()
+    Console(file=output, width=80, height=40).print(frame)
+    text = output.getvalue()
+
+    assert read_from == [history]
+    assert "WORKER GONE" in text
+    assert "Read from Temporal just now:" in text
+    assert "Agent loop saved." not in text
+    assert "Saved so far:" not in text
+    assert "(demo pauses here, before Stripe)" not in text
+    assert "Customer answers: 2" in text
+    assert "Completed lookups: 2" in text
+    assert "Next action: issue refund" in text
+    assert len(text.splitlines()) <= 20
 
 
 def test_stage_accepts_a_spoken_refund_request(monkeypatch) -> None:
@@ -282,7 +366,64 @@ def test_stage_closing_does_not_call_a_pending_refund_complete() -> None:
     text = panels[0].renderable.plain
 
     assert "Stripe status: PENDING" in text
+    assert "With Temporal: a new Worker picked up the same request." in text
     assert "One submitted request, one refund" not in text
+
+
+def test_stage_log_path_is_shown_relative_to_the_working_directory(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    inside = (tmp_path / ".demo-state" / "stage-ab12cd34").resolve()
+    outside = (tmp_path.parent / "elsewhere" / "stage-ab12cd34").resolve()
+
+    # Relative inside the working directory, so no username shows on screen;
+    # it still works as `refund-demo usage --state-dir` from the same folder.
+    assert _display_path(inside) == str(Path(".demo-state") / "stage-ab12cd34")
+    assert _display_path(outside) == str(outside)
+
+
+class _StopBeforeTemporal(Exception):
+    pass
+
+
+def test_demo_one_cues_say_literally_what_enter_does(tmp_path, monkeypatch) -> None:
+    """Capture the real input() prompts: one cue per frame, from the prompt."""
+
+    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
+    prompts: list[str] = []
+
+    def fake_input(prompt: str = "") -> str:
+        prompts.append(prompt)
+        return ""
+
+    async def stop_before_temporal(_self):
+        raise _StopBeforeTemporal
+
+    monkeypatch.setattr("builtins.input", fake_input)
+    monkeypatch.setattr(_Services, "connect_or_start_server", stop_before_temporal)
+
+    with pytest.raises(_StopBeforeTemporal):
+        asyncio.run(
+            run(
+                workflow_id="cue-test",
+                real=False,
+                real_model=False,
+                amount_cents=8000,
+            )
+        )
+
+    assert [prompt.strip() for prompt in prompts] == [
+        "Press Enter to start Demo 1 (without Temporal)",
+        "Ask for a refund\nyou>",
+        "agent> Was the package opened? [Yes]",
+        "agent> What was damaged? [Split seam]",
+        "Press Enter to kill this agent process (before it calls Stripe)",
+        "Press Enter to start a new agent process",
+        "Ask the new process: What happened to my refund?\nyou>",
+        "Press Enter for Demo 2: the same test with Temporal",
+    ]
+    assert not any("Worker" in prompt for prompt in prompts)
 
 
 def test_naive_worker_runs_questions_and_waits_before_refund(
