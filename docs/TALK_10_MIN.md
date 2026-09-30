@@ -9,9 +9,10 @@ The audience should leave with three ideas:
 
 1. Context, memory, and state can all inform an agent.
 2. Process-local working memory can disappear, while Stripe only proves what
-   reached Stripe; neither gives a replacement Worker the loop's position.
-3. Temporal lets a reloaded agent reconnect to that loop's completed steps and
-   next action. A stable identity also connects later retries to Stripe.
+   reached Stripe; neither gives a new process the loop's position.
+3. Temporal lets a new Worker rebuild that loop's completed steps and
+   next action. A stable identity, the Workflow run's, also connects later
+   retries to Stripe.
 
 ## Commands
 
@@ -45,7 +46,10 @@ that the reasoning turn was live.
   are available if using the fully live command.
 - Have a local Temporal dev server running before the talk to remove startup
   latency from the transition between demos. The stage runner will connect to
-  it instead of starting another one.
+  it instead of starting another one, and Temporal Web stays up at
+  <http://localhost:8233> after the stage exits. If another server holds the
+  default ports, use the port variant in
+  [Watch it in Temporal Web](TEMPORAL_WEB.md).
 - Make the terminal fullscreen and verify that both panes fit without wrapping.
 - Disable notifications and keep `uv run refund-demo stage --real` ready as the
   deterministic-model fallback.
@@ -61,13 +65,14 @@ retrieval, summaries, and long-term memory. But working memory is often still
 inside one process. An agent can know exactly what to do and still lose the work
 a customer submitted.”
 
-“I am going to replace a real Worker after an agent asks questions, performs
+“I am going to kill the agent's process after it asks questions, performs
 lookups, and chooses the refund as its next action—but before Stripe receives
 the request. What changes is whether that loop has a durable owner.”
 
 **Action**
 
-Start `refund-demo stage`. Press Enter once to reveal the empty naive agent.
+Start `refund-demo stage`. At `Press Enter to start Demo 1 (without Temporal)`,
+press Enter once to reveal the empty agent process.
 
 **Checkpoint:** Say the hook by **0:25** and move on by **0:45**.
 
@@ -98,28 +103,33 @@ Point to the agent view on the left and the effect owner on the right.
 **Say before sending the request**
 
 “Nyghtowl already bought the plush python. Stripe says the payment is paid. The
-left side is this agent session; the right side is what Stripe actually knows.”
+left side is the agent process; the right side, What Survives, is what Stripe
+actually knows.”
 
 **Action**
 
-At the `you>` prompt, ask for a refund. The agent chooses each next action. Press
-Enter through two prefilled answers: whether the package was opened and what was
-damaged. Pause after two automatic lookups when the screen says `Next: issue
-refund`, then press Enter to replace the Worker.
+At the `you>` prompt, ask for a refund. The naive side is a scripted process, so
+both demos take the same steps; the dim third header line says so
+(`Scripted steps · Stripe test mode`, or `offline ledger (no Stripe)` without
+`--real`). Press Enter through two prefilled answers: whether the package was
+opened and what was damaged. Pause after two automatic lookups when the screen
+says `Next: issue refund` and `The demo pauses here, before Stripe.`, then press
+Enter at `Press Enter to kill this agent process (before it calls Stripe)`.
 
 **Say over the completed-loop frame**
 
-“This is an autonomous loop: ask, observe, look something up, choose the next
-action. It has chosen the refund, but that execution position exists only in
-this Worker. Stripe still shows paid and no refund because it has not been
+“This is the shape of an agent loop: ask, observe, look something up, choose the
+next action. It has chosen the refund, but that execution position exists only
+in this process. Stripe still shows paid and no refund because it has not been
 called.”
 
 **Action**
 
-Hold the `WORKER GONE` frame for three seconds. The process-local answers and
-loop position are gone; Stripe still shows its authoritative state. Press Enter
-to start the `REPLACEMENT WORKER`, then ask, “What happened to my refund?” That
-question and the Stripe lookup run inside the new process. Pause on the answer
+Hold the `PROCESS GONE` frame for three seconds. The answers and next step are
+gone; `WHAT'S LEFT` is Stripe's record, which is correct because Stripe was
+never called. Press Enter to start the `NEW AGENT PROCESS`, then ask, “What
+happened to my refund?” That question and the Stripe lookup run inside the new
+process. Pause on the answer
 that no request reached Stripe and the return must start again.
 
 In `--real` mode, that answer comes from retrieving the PaymentIntent and refund
@@ -128,10 +138,10 @@ list from Stripe. This is a read only: the naive half never submits the refund.
 **Say**
 
 “Stripe's record is correct: no refund happened. But Stripe never owned the
-customer's answers or the agent's progress. Those lived in the Worker, so the
-customer restarts the loop.”
+customer's answers or the agent's progress. Those lived in the process, so the
+customer starts over.”
 
-**Checkpoint:** `THE CUSTOMER RESTARTS THE LOOP` must be visible by **3:15**.
+**Checkpoint:** `THE CUSTOMER STARTS OVER` must be visible by **3:15**.
 
 ### 3:15–3:45 — Separate the two questions
 
@@ -148,7 +158,7 @@ this particular autonomous loop stands.”
 
 **Action**
 
-Press Enter to prepare the durable version.
+Press Enter at `Press Enter for Demo 2: the same test with Temporal`.
 
 ### 3:45–6:30 — Temporal recovery knows where to continue
 
@@ -160,12 +170,13 @@ payment and refund, and Temporal owns the submitted loop and its progress.”
 **Action**
 
 At the `you>` prompt, ask the Temporal-backed agent for the refund. The runner
-fast-forwards the same two answers so the audience does not repeat them. On the
-saved-loop frame, point out:
+replays the same two answers into the Workflow as Signals so the audience does
+not repeat them, and the spinner says so: “Reusing your Demo 1 answers so you
+don't type them twice.” On the saved-loop frame, point out:
 
-- Temporal: two customer answers, two completed lookups, next action `issue
-  refund`.
-- Stripe: payment paid; no refund yet.
+- Temporal, `Saved so far:`: two customer answers, two completed lookups, next
+  action `issue refund`, and `(demo pauses here, before Stripe)`.
+- Stripe: payment paid; `Refund: none`.
 - The left shows what this Worker sees; the right shows what survives it.
 
 The live request must refer to order 1234 or the plush python. The stage's fixed
@@ -175,32 +186,40 @@ Rehearse the live model against the offline ledger before adding `--real`.
 
 **Say**
 
-“This is the same loop and the same boundary. The difference is that its
+“These are the same steps and the same boundary. The difference is that the
 completed observations and chosen next action now have a durable owner.”
 
 **Action**
 
-Press Enter to replace the Worker. Hold the `WORKER GONE` frame for three
-seconds.
+Press Enter at `Press Enter to kill this Worker (before it calls Stripe)`. The
+`WORKER GONE` frame reads Temporal's history as it draws, which can take up to
+three seconds. Hold it for three seconds once it appears, and point at
+`Read from Temporal just now:` on the right.
 
 **Say while pointing right**
 
-“The conversation and working view disappeared with the Worker. Temporal still
-has both answers, both lookups, and the next action. Stripe still correctly says
-no refund. The Worker is disposable; the loop is not.”
+“The in-memory loop disappeared with the Worker. Nothing is
+running, and Temporal still has both answers, both lookups, and the next action.
+Stripe still correctly says no refund. The Worker is disposable; the loop is
+not.”
+
+If the pane instead says `Could not re-read Temporal.`, the counts are the
+earlier reading from before the kill. Say so, and use Temporal Web History as the
+proof.
 
 **Action**
 
-Press Enter to start the replacement Worker. After recovery, make the left pane
-the headline: `NO REPEATED QUESTIONS`, `NO LOOP RESTART`, and “Your refund is
-complete.” Point right to Stripe's successful refund.
+Press Enter at `Press Enter to start a new Worker`. After recovery, make the
+left pane, `NEW TEMPORAL WORKER`, the headline: `NO REPEATED QUESTIONS`,
+`NO LOOP RESTART`, “Same loop, rebuilt from Temporal,” and “Your refund is
+complete.” Point right to `Refund: SUCCEEDED`.
 
 **Say**
 
 “On the naive side, the working memory disappeared and Stripe only knew that no
-refund had arrived. Here the replacement Worker reconnects to the same
-autonomous work, continues at its next action, and can say, ‘Your refund is
-complete’ only after Stripe returns `succeeded`.”
+refund had arrived. Here a new Worker rebuilds the same loop from
+Temporal, continues at its next action, and can say, ‘Your refund is complete’
+only after Stripe returns `succeeded`.”
 
 **Checkpoint:** The recovered result should be visible by **6:30**.
 
@@ -212,10 +231,11 @@ complete’ only after Stripe returns `succeeded`.”
 
 - Temporal owns the Workflow's completed observations and execution progress.
 - Stripe owns whether the refund committed.
-- The Workflow identity becomes the Stripe idempotency key.”
+- The Workflow run's identity becomes the Stripe idempotency key.”
 
-“That Workflow identity is also how the reloaded agent reconnects to existing
-work instead of starting another refund.”
+“In a real application, the Workflow ID is how a reloaded agent finds this work
+again instead of starting another refund. Here the stage runner simply keeps
+it.”
 
 “Today I replaced the Worker before the Stripe call, so the visible payoff was
 loop recovery. If the Worker instead disappears just after Stripe commits,
@@ -247,7 +267,7 @@ result = await workflow.execute_activity(
 “The agent loop is ordinary Python. Customer answers arrive as durable Signals;
 lookups and the irreversible operation cross Activity boundaries. Temporal
 records the observations and where the loop stands. Inside the refund Activity,
-the Workflow identity becomes the effect's idempotency key.”
+the Workflow run's identity becomes the effect's idempotency key.”
 
 Do not explain the full agent loop, history replay algorithm, retry policy, or
 SDK syntax unless asked.
@@ -273,26 +293,26 @@ recover it.”
 
 For a visible retry without a release Signal, start with `uv run refund-demo
 stage --real --simulate-stripe-timeout`. Attempt 1 waits on a simulated
-unresponsive Stripe API, the Worker disappears, and attempt 2 remains pending
-until you start the replacement Worker.
+unresponsive Stripe API, the Worker is killed, and attempt 2 remains pending
+until you start a new Worker.
 
 For the optional uncertain-effect ending, start with `uv run refund-demo stage
 --real --simulate-stripe-retry`. After Stripe accepts attempt 1, the runner
-removes the Worker and waits with the Activity unresolved. Press Enter once to
-start the replacement Worker. Temporal's Event History then exposes
+kills the Worker and waits with the Activity unresolved. Press Enter once to
+start a new Worker. Temporal's Event History then exposes
 `ActivityTaskStarted` attempt 2 with the heartbeat timeout in `lastFailure`.
 
 | Control | Screen or action | Target time |
 | --- | --- | --- |
-| Enter | Empty naive agent | 0:45 |
+| Enter at `start Demo 1 (without Temporal)` | Empty `AGENT PROCESS` | 0:45 |
 | Type refund request + Enter through 2 answers | Four observations and `Next: issue refund` are visible | 1:55 |
-| Enter | Naive Worker replaced; `WORKER GONE` | 2:10 |
-| Enter | Replacement Worker opens; memory returns but loop position is gone | 2:15 |
-| Ask “What happened to my refund?” | Agent checks Stripe; `THE CUSTOMER RESTARTS THE LOOP` appears | 2:50 |
-| Enter | Empty durable agent | 3:45 |
+| Enter at `kill this agent process` | `PROCESS GONE`; `WHAT'S LEFT` is Stripe's record | 2:10 |
+| Enter at `start a new agent process` | `NEW AGENT PROCESS`: “No answers. No next step.” | 2:15 |
+| Ask “What happened to my refund?” | Agent checks Stripe; `THE CUSTOMER STARTS OVER` appears | 2:50 |
+| Enter at `Demo 2: the same test with Temporal` | Empty `TEMPORAL WORKER` | 3:45 |
 | Type refund request | Temporal shows 2 answers, 2 lookups, and the saved next action | 4:30 |
-| Enter | Current Worker replaced; `WORKER GONE` | 5:15 |
-| Enter | Reloaded agent answers without repeated questions | 6:15 |
+| Enter at `kill this Worker` | `WORKER GONE` with `Read from Temporal just now:` (up to 3 s to appear) | 5:15 |
+| Enter at `start a new Worker` | `NEW TEMPORAL WORKER` answers without repeated questions | 6:15 |
 | Enter | Final takeaway | 9:30 |
 
 ## If time slips
@@ -327,7 +347,7 @@ start the replacement Worker. Temporal's Event History then exposes
 
 **Why not query Stripe before refunding?**
 
-The naive replacement agent does query Stripe. Stripe correctly says the charge
+The new agent process does query Stripe. Stripe correctly says the charge
 is paid and no refund exists, but it never received the customer answers or the
 agent's progress. A persisted memory system could restore those facts, but it
 still would not own the interrupted operation or say which action must resume.
@@ -360,3 +380,24 @@ recovery contracts.
 
 No. The Activity can call the effect owner more than once. The stable
 idempotency key makes those calls resolve to one refund.
+
+**What does it cost to run?**
+
+The deterministic stage, with or without `--real`, makes no model calls: 0
+tokens and $0. A live-model pass makes four model calls. GPT-5.6 Luna was
+measured on 2026-09-30: 2,492 input and 353 output tokens (114 of them
+reasoning), 2,845 tokens in all, $0.0009. Claude Sonnet 4.6 has not been run;
+it is an estimated 5,400 to 6,900 input and 200 to 400 output tokens, about two
+cents. Both are priced at list prices checked on 2026-09-29. Killing the Worker
+adds no model calls, because the new Worker replays the recorded turns. The
+README's
+"Cost to run" has the full table, and [the cost methodology](COST.md) has a way
+to measure a pass.
+
+**Doesn't Event History grow forever?**
+
+It grows with every turn, and it has limits: continue-as-new is suggested at 4
+MiB or 4,096 events, and a Workflow is terminated past 50 MB or 51,200 events.
+This loop stays under 7 KB of payloads. Longer agents keep large records in a
+memory store and pass keys (a claim check), and roll over with continue-as-new.
+See the README's "When Event History grows".

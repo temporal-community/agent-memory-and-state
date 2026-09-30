@@ -73,13 +73,14 @@ The dangerous band between memory and state is process-local loop progress:
 A deploy, eviction, restart, OOM, or network partition can remove that progress
 at exactly the point where the application owes work. The effect owner still
 has its authoritative record, but that record contains only what reached it.
+The README calls this failure mode lost loop position.
 
-In the naive stage demo, the agent asks two questions, performs two lookups, and
-chooses `issue refund` as its next action. The Worker then disappears before
-calling Stripe. Its process-local working memory disappears too. A replacement
-agent correctly finds a paid order with no refund in Stripe, but Stripe never
-owned Nyghtowl's answers, the completed observations, or the next action. The
-customer therefore restarts the return.
+In the naive stage demo, a scripted agent process asks two questions, performs
+two lookups, and chooses `issue refund` as its next action. The process is then
+killed before calling Stripe. Its process-local working memory disappears too.
+A new agent process correctly finds a paid order with no refund in Stripe,
+but Stripe never owned Nyghtowl's answers, the completed observations, or the
+next action. The customer therefore starts over.
 
 Persisting the answers in a separate memory system would make them retrievable,
 but would not by itself make that system the owner of an active operation. To
@@ -105,8 +106,10 @@ A Temporal Workflow's execution state:
 - stays as retained history for a configured period
 - is eventually deleted
 
-That is neither simply ephemeral nor permanently stored. Lifespan is a
-configuration choice. Authority is the stable boundary:
+That is neither simply ephemeral nor permanently stored. Event History is also
+bounded in size, so a long agent loop keeps large records in a memory store and
+passes only keys through the Workflow (see "When Event History grows" in the
+README). Lifespan is a configuration choice. Authority is the stable boundary:
 
 > When the agent's copy and the owner's record disagree, the owner's record
 > wins.
@@ -121,7 +124,10 @@ the refund but before Stripe is called. At that moment:
 - Stripe owns a paid charge and no refund.
 - The Worker process owns nothing authoritative.
 
-After the replacement Worker resumes, it reaches the refund Activity and Stripe
+The stage's `WORKER GONE` frame reads those Signals and completed Activities
+from Event History while no Worker is running.
+
+After a new Worker resumes, it reaches the refund Activity and Stripe
 records the refund. Both owners remain necessary.
 
 The manual technical demo exercises the later uncertain boundary: it loses the
@@ -135,9 +141,14 @@ At that moment:
 - The Worker process owns nothing authoritative.
 
 Temporal retries the Activity because it cannot assume the first attempt
-completed. The Workflow's durable identity becomes the Stripe idempotency key,
-so the second call asks Stripe about the same effect instead of creating a new
-one.
+completed. The Stripe idempotency key comes from the Workflow run's identity:
+`durable-refund-` plus the SHA-256 of `<workflow_id>:<run_id>`. The second call
+therefore asks Stripe about the same effect instead of creating a new one.
+
+The key stays the same across retries within one run. It changes for a new run
+that reuses the Workflow ID, a reset, or continue-as-new, because each of those
+gets a new Run ID. A key that must survive continue-as-new would have to come
+from `workflow.info().first_execution_run_id` instead.
 
 The result may be two calls, but it remains one refund.
 
@@ -153,12 +164,17 @@ customer said. Temporal owns a different problem: after the original Worker
 disappears, it retains which observations completed and that the logical refund
 is ready to run.
 
-The application must reconnect the reloaded agent to the same Workflow ID. It
-can then surface the Workflow's current status or result instead of repeating
-the questions or restarting the loop. At the later uncertain boundary, Temporal
-retries the unresolved Activity; Stripe reconciles the stable effect identity;
-and Temporal records the returned result. The agent can answer, “Your refund is
-complete,” without replaying the customer interaction.
+The application must keep or derive the same Workflow ID for the reloaded agent.
+With it, the agent can surface the Workflow's current status or result instead
+of repeating the questions or restarting the loop. In the guided stage, the
+runner holds the Workflow handle the whole time, so what the audience sees is a
+new Worker rebuilding the loop, not an application finding its Workflow
+again.
+
+At the later uncertain boundary, Temporal retries the unresolved Activity;
+Stripe reconciles the stable effect identity; and Temporal records the returned
+result. The agent can answer, “Your refund is complete,” without replaying the
+customer interaction.
 
 Temporal does not automatically inject that answer into a model or user
 interface. The application is responsible for retaining or deriving the

@@ -9,11 +9,13 @@ uv run refund-demo stage
 This guide exposes every process and recovery step separately. Use it for
 development, rehearsal, debugging, or a longer technical walkthrough.
 
-The guided stage makes an autonomous loop visible. The agent chooses two
-questions, observes the answers, performs two lookups, and chooses `issue
-refund`. On the naive side that position exists only in the Worker. On the
-durable side, answers are Signals, lookups are Activities, and the next action
-is Workflow state. A replacement Worker resumes without repeating questions.
+The guided stage makes an agent loop visible. The durable agent asks two intake
+questions, observes the answers, chooses its lookups, and decides `issue
+refund`. The naive side runs the same steps as a scripted process, and that
+position exists only in its process. On the durable side, answers are Signals,
+lookups are Activities, and the next action is Workflow state. A replacement
+Worker rebuilds the loop from Event History and resumes without repeating
+questions.
 
 ## Setup
 
@@ -27,7 +29,13 @@ Prerequisites:
 uv sync --extra dev --extra tui
 ```
 
-Copy `.env.example` to `.env` and fill in only the services you intend to use.
+Create `.env` from the example without overwriting an existing one, then fill
+in only the services you intend to use:
+
+```bash
+test -e .env || cp .env.example .env
+```
+
 The Worker and CLI load `.env` automatically. Exported shell values take
 precedence, and configuration is never loaded into deterministic Workflow code.
 
@@ -39,8 +47,9 @@ The model and refund effect are independent:
 - With `OPENAI_API_KEY` and `OPENAI_MODEL`, the agent can use OpenAI.
 - `AGENT_MODEL_PROVIDER` selects `anthropic` or `openai`; the CLI
   `--model-provider` option records that choice in Workflow input.
-- Without a configured live-model provider, `--dry-run` uses the deterministic
-  policy.
+- `refund-demo start --dry-run` calls the live model whenever a model key is
+  configured, and uses the deterministic policy only when none is. It is free
+  (0 tokens, $0) only without a model key.
 - `--dry-run` writes to an offline Stripe-like ledger under `.demo-state`.
 - `--real` calls Stripe test mode and requires a `sk_test_` or `rk_test_` key.
 - The guided `--real` runner creates the paid test PaymentIntent before the
@@ -56,6 +65,7 @@ The model and refund effect are independent:
 | `OPENAI_MODEL` | Model id used when a key is present |
 | `STRIPE_API_KEY` | Stripe test key required by `--real` |
 | `EFFECT_RESTART_WINDOW_SECONDS` | Holds the uncertain boundary open for a Worker kill |
+| `LOG_MODEL_USAGE` | Set to `1` to log each live model call's tokens to `model-usage.jsonl` in `DEMO_STATE_DIR`; summarize with `uv run refund-demo usage` |
 | `TEMPORAL_ADDRESS` | Temporal endpoint, default `localhost:7233` |
 | `TEMPORAL_NAMESPACE` | Temporal namespace |
 | `TEMPORAL_TASK_QUEUE` | Worker task queue |
@@ -105,17 +115,19 @@ Run the naive two-pane agent:
 uv run naive-refund
 ```
 
-The left pane shows the process-local agent loop. The right pane shows the paid
-order and Stripe's refund state.
+The left pane, `AGENT PROCESS`, shows the process-local agent loop. The right
+pane, `WHAT SURVIVES`, shows the paid order and the refund state. Standalone, it
+reads the naive offline ledger, so its heading is
+`OFFLINE LEDGER (Stripe stand-in)`.
 
 1. Press Enter or type `refund`. The standalone view condenses the agent's two
    questions, two answers, and two lookups into its completed-loop checklist;
    the guided stage asks the questions one at a time.
-2. Type `restart`. The process-local answers and loop position disappear.
-   Stripe still says paid with no refund.
+2. Type `restart`. The pane becomes `NEW AGENT PROCESS`: "No answers. No next
+   step." Stripe still says paid with no refund (`FRESH START`).
 3. Ask, `What happened to my refund?`
-4. The replacement agent checks Stripe and answers correctly, but the customer
-   must restart the return because there is no active execution to resume.
+4. The new agent process checks Stripe and answers correctly, but the customer
+   must start the return over because there is no active execution to resume.
 
 With `refund-demo stage --real`, step 4 retrieves the test PaymentIntent and its
 refund list directly from Stripe inside a fresh naive-agent subprocess. The
@@ -221,7 +233,7 @@ Activity reports completion, and pauses with the retry unresolved. Temporal's
 Event History compacts the intermediate failure: after recovery, the
 `ActivityTaskStarted` event carries `attempt: 2` and a `lastFailure` heartbeat
 timeout rather than a separate `ActivityTaskTimedOut` event. Press Enter to
-start the replacement Worker; attempt 2 uses the same Stripe idempotency key and
+start a new Worker; attempt 2 uses the same Stripe idempotency key and
 returns the same refund. Run the same command without `--real` to rehearse
 against the offline ledger.
 
@@ -240,15 +252,17 @@ uv run refund-demo stage --real --simulate-stripe-timeout
 This path does not use the `release` Signal. Attempt 1 enters `issue_refund` and
 simulates Stripe never responding before accepting a refund. The Worker then
 disappears, Temporal advances the unresolved Activity to attempt 2, and no call
-can complete until you start the replacement Worker. Attempt 2 calls Stripe
+can complete until you start a new Worker. Attempt 2 calls Stripe
 normally. Use this path when the story is “the API was down”; use
 `--simulate-stripe-retry` for the harder post-commit uncertainty case.
 
 Stripe's idempotency support is what keeps a repeated call from creating a
-second refund. Temporal remembers that the step is unresolved, arranges the
-retry after the Worker disappears, and records the result so a reloaded agent
-can reconnect to the same work. The application must retain or derive the same
-Workflow ID when that agent reloads.
+second refund. The key is derived from the Workflow run's identity
+(`durable-refund-` plus the SHA-256 of `<workflow_id>:<run_id>`), so both
+attempts in one run share it. Temporal remembers that the step is unresolved,
+arranges the retry after the Worker disappears, and records the result. A
+reloaded agent can read that result only if the application retains or derives
+the same Workflow ID.
 
 Start the Worker with a visible restart window:
 
@@ -355,7 +369,7 @@ The left panel is the Worker's in-process decision view:
 - the decision
 
 It reads `LOST` when the Worker disappears and repopulates from replay when a
-replacement Worker resumes.
+new Worker resumes.
 
 The right panel separates:
 
@@ -402,13 +416,20 @@ temporal workflow describe --workflow-id demo-restart
 Useful events include:
 
 - model and tool Activities from the bounded loop
-- `WorkflowExecutionSignaled` when a human approves
+- `WorkflowExecutionSignaled` when a human approves, or when the stage sends a
+  customer answer
 - `issue_refund` attempt 2 after Worker recovery
+
+The history is served with no Worker running. The stage's `WORKER GONE` frame
+reads this same history to show the saved answers, lookups, and next action.
+`describe` also prints the history length and size; see "When Event History
+grows" in the README for why that matters in an agent loop.
 
 ## Recovery notes
 
 - `result` reads and waits. It does not drive the Workflow. If it hangs, confirm
-  that a Worker is polling.
+  that a Worker is polling. A stage Workflow uses a private
+  `refund-stage-<token>` queue, so `uv run refund-worker` cannot serve it.
 - Use a fresh Workflow id for each run.
 - Do not resume a run created under incompatible older Workflow code.
 - Terminate a stale run with `refund-demo stop <id>`.
