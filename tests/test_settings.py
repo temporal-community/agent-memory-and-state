@@ -1,11 +1,62 @@
+import ast
+import os
+import socket
+from pathlib import Path
+
 import pytest
 
 from refund_agent.settings import (
     agent_view_path,
     effect_restart_window_seconds,
     model_usage_path,
+    temporal_identity,
     validate_stripe_key,
 )
+
+_PACKAGE = Path(__file__).resolve().parents[1] / "src" / "refund_agent"
+
+
+@pytest.mark.parametrize("value", [None, "", "   "])
+def test_temporal_identity_keeps_the_pid_and_drops_the_hostname(
+    value, monkeypatch
+) -> None:
+    if value is None:
+        monkeypatch.delenv("TEMPORAL_IDENTITY", raising=False)
+    else:
+        monkeypatch.setenv("TEMPORAL_IDENTITY", value)
+
+    identity = temporal_identity()
+
+    assert identity == f"{os.getpid()}@refund-demo"
+    assert socket.gethostname() not in identity
+
+
+def test_temporal_identity_can_be_overridden(monkeypatch) -> None:
+    monkeypatch.setenv("TEMPORAL_IDENTITY", "take-01@studio")
+
+    assert temporal_identity() == "take-01@studio"
+
+
+def test_every_temporal_client_sets_an_identity() -> None:
+    # A Client.connect without identity= falls back to the SDK's
+    # "<pid>@<hostname>" and puts the machine name in Temporal Web.
+    missing: list[str] = []
+    calls = 0
+    for path in sorted(_PACKAGE.glob("*.py")):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "connect"
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == "Client"
+            ):
+                calls += 1
+                if "identity" not in {keyword.arg for keyword in node.keywords}:
+                    missing.append(f"{path.name}:{node.lineno}")
+
+    assert calls >= 4
+    assert missing == []
 
 
 def test_test_stripe_key_is_accepted() -> None:

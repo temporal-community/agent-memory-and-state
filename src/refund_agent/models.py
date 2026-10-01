@@ -27,14 +27,21 @@ class RefundRequest:
     # a Worker can be killed and restarted to show replay skipping a step that is
     # already recorded, rather than repeating it.
     hold_after_effect: bool = False
-    # The single-window stage runner uses a short Activity heartbeat timeout so
-    # recovery is visible without making an audience wait. Normal and real
-    # Stripe runs keep the more conservative production-shaped timeout.
+    # Set by the single-window stage runner. Combined with one of the simulated
+    # failures below, the refund Activity gets a short heartbeat timeout so a
+    # Worker lost mid-Activity is detected without making an audience wait.
+    # Every other run, including the main stage take, keeps the 15 s heartbeat
+    # timeout (see refund_activity_timeouts).
     fast_recovery: bool = False
     # Optional stage-only failure injection. Attempt 1 blocks before contacting
     # Stripe, like an API call that never responds; a replacement Worker then
     # runs attempt 2 normally.
     simulate_stripe_timeout: bool = False
+    # Records that the stage runner will kill the Worker after Stripe accepts
+    # attempt 1 (EFFECT_RESTART_WINDOW_SECONDS on that Worker holds the window
+    # open). It only selects the short heartbeat timeout; the Activity itself
+    # does not read it.
+    simulate_stripe_retry: bool = False
     # The guided talk path is deterministic by default, even when an OpenAI key
     # or Anthropic key is present. Passing --real-model opts back into live
     # model reasoning.

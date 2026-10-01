@@ -1,10 +1,19 @@
+import asyncio
 import json
-from dataclasses import asdict
+import shutil
+import time
+import uuid
+from dataclasses import asdict, replace
+from datetime import timedelta
 from types import SimpleNamespace
 
 import pytest
+import stripe
+from temporalio import activity
+from temporalio.exceptions import ApplicationError
 
 from refund_agent.activities import (
+    STRIPE_TIMEOUT_SECONDS,
     TOOL_HISTORY,
     TOOL_ORDER,
     TOOL_POLICY,
@@ -13,7 +22,8 @@ from refund_agent.activities import (
     lookup_customer_history,
     lookup_order,
 )
-from refund_agent.models import RefundRequest
+from refund_agent.models import AgentStep, RefundDecision, RefundRequest, RefundResult
+from refund_agent.workflow import RefundWorkflow, refund_activity_timeouts
 
 
 def _request(amount_cents: int) -> RefundRequest:
@@ -514,3 +524,272 @@ def test_usage_command_prints_tokens_and_dollars(tmp_path, capsys) -> None:
     # 1,200 input tokens x $1 + 360 output tokens x $10, per 1M tokens.
     assert "$0.004800" in overridden
     assert "your --input-price/--output-price" in overridden
+
+
+# ---------------------------------------------------------------------------
+# EFFECT: issue_refund timeouts, Stripe failures, and the final phase.
+# ---------------------------------------------------------------------------
+
+_STRIPE_WORST_CASE = timedelta(seconds=sum(STRIPE_TIMEOUT_SECONDS))
+
+
+@pytest.mark.parametrize(
+    ("changes", "heartbeat_seconds"),
+    [
+        ({}, 15),
+        ({"fast_recovery": True}, 15),  # the main stage take
+        ({"fast_recovery": True, "simulate_stripe_timeout": True}, 3),
+        ({"fast_recovery": True, "simulate_stripe_retry": True}, 3),
+        ({"simulate_stripe_retry": True}, 15),
+    ],
+)
+def test_short_heartbeat_only_where_the_stage_kills_the_worker_mid_refund(
+    changes, heartbeat_seconds
+) -> None:
+    request = replace(_request(8000), dry_run=False, **changes)
+
+    heartbeat, start_to_close = refund_activity_timeouts(request)
+
+    assert heartbeat == timedelta(seconds=heartbeat_seconds)
+    # One attempt outlasts the Stripe client timeout, so Stripe's own timeout
+    # reports a hung call before Temporal ends the attempt.
+    assert start_to_close > _STRIPE_WORST_CASE
+
+
+def test_real_refund_call_is_bounded_and_leaves_retries_to_temporal(
+    monkeypatch,
+) -> None:
+    from refund_agent import activities
+
+    monkeypatch.setenv("STRIPE_API_KEY", "sk_test_example")
+    monkeypatch.setattr(stripe, "api_key", None)
+    monkeypatch.setattr(stripe, "max_network_retries", 2)
+    monkeypatch.setattr(stripe, "default_http_client", None)
+    created: dict = {}
+
+    def fake_create(**kwargs):
+        created.update(kwargs)
+        return SimpleNamespace(id="re_test", status="succeeded", amount=8000)
+
+    monkeypatch.setattr(stripe.Refund, "create", fake_create)
+
+    effect = activities._real_stripe_refund(_request(8000), "wf", "key-1")
+
+    assert effect == {
+        "refund_id": "re_test",
+        "status": "succeeded",
+        "amount_cents": 8000,
+    }
+    assert created["idempotency_key"] == "key-1"
+    assert stripe.max_network_retries == 0
+    assert isinstance(stripe.default_http_client, stripe.RequestsClient)
+    assert stripe.default_http_client._timeout == STRIPE_TIMEOUT_SECONDS
+
+
+@pytest.mark.parametrize(
+    ("error", "retryable"),
+    [
+        (stripe.APIConnectionError("ReadTimeout", should_retry=True), True),
+        # The SDK marks an SSL failure as not worth retrying.
+        (stripe.APIConnectionError("SSLError", should_retry=False), False),
+        (stripe.APIError("idempotency key in use", http_status=409), True),
+        (stripe.RateLimitError("slow down", http_status=429), True),
+        (stripe.APIError("server error", http_status=500), True),
+        # Stripe-Should-Retry overrides the status code either way.
+        (
+            stripe.APIError(
+                "replayed failure",
+                http_status=500,
+                headers={"stripe-should-retry": "false"},
+            ),
+            False,
+        ),
+        (
+            stripe.InvalidRequestError(
+                "lock timeout",
+                None,
+                http_status=400,
+                headers={"stripe-should-retry": "true"},
+            ),
+            True,
+        ),
+        (
+            stripe.InvalidRequestError(
+                "No such payment_intent", "payment_intent", http_status=404
+            ),
+            False,
+        ),
+        (stripe.AuthenticationError("bad key", http_status=401), False),
+    ],
+)
+def test_issue_refund_retries_only_transient_stripe_failures(
+    error, retryable, tmp_path, monkeypatch
+) -> None:
+    from temporalio.testing import ActivityEnvironment
+
+    from refund_agent import activities
+
+    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
+    monkeypatch.delenv("EFFECT_RESTART_WINDOW_SECONDS", raising=False)
+
+    def failing_refund(*_args):
+        raise error
+
+    monkeypatch.setattr(activities, "_real_stripe_refund", failing_refund)
+    decision = RefundDecision(recommendation="approve", rationale="", source="test")
+
+    with pytest.raises(ApplicationError) as raised:
+        ActivityEnvironment().run(
+            activities.issue_refund,
+            replace(_request(8000), dry_run=False),
+            decision,
+            [],
+        )
+
+    assert raised.value.non_retryable is not retryable
+    assert raised.value.__cause__ is error
+
+
+def _run_real_refund(monkeypatch, tmp_path, fake_refund, on_heartbeat=None):
+    from temporalio.testing import ActivityEnvironment
+
+    from refund_agent import activities
+
+    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
+    monkeypatch.delenv("EFFECT_RESTART_WINDOW_SECONDS", raising=False)
+    monkeypatch.setattr(activities, "_real_stripe_refund", fake_refund)
+    environment = ActivityEnvironment()
+    if on_heartbeat is not None:
+        environment.on_heartbeat = on_heartbeat
+    return environment.run(
+        activities.issue_refund,
+        replace(_request(8000), dry_run=False),
+        RefundDecision(recommendation="approve", rationale="", source="test"),
+        [],
+    )
+
+
+@pytest.mark.parametrize(("retry_after", "delay"), [("30", 30), ("120", None)])
+def test_retryable_stripe_error_carries_retry_after(
+    retry_after, delay, tmp_path, monkeypatch
+) -> None:
+    error = stripe.RateLimitError(
+        "slow down", http_status=429, headers={"retry-after": retry_after}
+    )
+
+    def rate_limited(*_args):
+        raise error
+
+    with pytest.raises(ApplicationError) as raised:
+        _run_real_refund(monkeypatch, tmp_path, rate_limited)
+
+    assert not raised.value.non_retryable
+    expected = timedelta(seconds=delay) if delay else None
+    assert raised.value.next_retry_delay == expected
+
+
+def test_issue_refund_heartbeats_while_stripe_is_slow(tmp_path, monkeypatch) -> None:
+    heartbeats: list[tuple] = []
+
+    def slow_refund(*_args):
+        time.sleep(1.3)
+        return {"refund_id": "re_slow", "status": "succeeded", "amount_cents": 8000}
+
+    result = _run_real_refund(
+        monkeypatch,
+        tmp_path,
+        slow_refund,
+        on_heartbeat=lambda *details: heartbeats.append(details),
+    )
+
+    assert result.refund_id == "re_slow"
+    # A slow call keeps the attempt alive instead of looking like a lost Worker.
+    assert heartbeats
+
+
+async def _wait_for_phase(handle, phase: str) -> None:
+    deadline = time.monotonic() + 15
+    seen = None
+    while time.monotonic() < deadline:
+        seen = (await handle.query(RefundWorkflow.stage_progress))["phase"]
+        if seen == phase:
+            return
+        await asyncio.sleep(0.05)
+    raise AssertionError(f"phase stayed {seen!r}; expected {phase!r}")
+
+
+async def _check_refund_phases(temporal: str) -> None:
+    from temporalio.testing import WorkflowEnvironment
+    from temporalio.worker import Worker
+
+    refund_may_return = asyncio.Event()
+
+    @activity.defn(name="agent_step")
+    async def decide(request: RefundRequest, working_memory: list[dict]) -> AgentStep:
+        return AgentStep(action="decide", recommendation="approve", rationale="")
+
+    @activity.defn(name="issue_refund")
+    async def refund(
+        request: RefundRequest,
+        decision: RefundDecision,
+        working_memory: list[dict],
+    ) -> RefundResult:
+        await refund_may_return.wait()
+        return RefundResult(
+            refund_id="re_test",
+            status="succeeded",
+            amount_cents=request.amount_cents,
+            idempotency_key="key",
+            activity_attempt=1,
+            mode="dry-run",
+        )
+
+    async with await WorkflowEnvironment.start_local(
+        dev_server_existing_path=temporal
+    ) as env:
+        queue = f"phase-test-{uuid.uuid4().hex[:8]}"
+        async with Worker(
+            env.client,
+            task_queue=queue,
+            workflows=[RefundWorkflow],
+            activities=[decide, refund],
+        ):
+            held = await env.client.start_workflow(
+                RefundWorkflow.run,
+                replace(_request(8000), hold_after_effect=True),
+                id=f"held-{queue}",
+                task_queue=queue,
+            )
+            await _wait_for_phase(held, "issuing_refund")
+            refund_may_return.set()
+            await _wait_for_phase(held, "holding_after_effect")
+            await held.signal(RefundWorkflow.release)
+            assert (await held.result()).refund_id == "re_test"
+            await _wait_for_phase(held, "completed")
+
+            plain = await env.client.start_workflow(
+                RefundWorkflow.run,
+                _request(8000),
+                id=f"plain-{queue}",
+                task_queue=queue,
+            )
+            await plain.result()
+            assert await plain.query(RefundWorkflow.stage_phase) == "completed"
+            history = await plain.fetch_history()
+            [scheduled] = [
+                event.activity_task_scheduled_event_attributes
+                for event in history.events
+                if event.HasField("activity_task_scheduled_event_attributes")
+                and event.activity_task_scheduled_event_attributes.activity_type.name
+                == "issue_refund"
+            ]
+            assert scheduled.heartbeat_timeout.ToTimedelta() == timedelta(seconds=15)
+
+
+def test_stage_progress_reports_completed_after_the_refund() -> None:
+    # A real local dev server on a free port, from the temporal CLI on PATH.
+    # Nothing is downloaded, and no other Temporal server is touched.
+    temporal = shutil.which("temporal")
+    if temporal is None:
+        pytest.skip("needs the temporal CLI on PATH")
+    asyncio.run(_check_refund_phases(temporal))

@@ -65,7 +65,16 @@ the `Stage logs:` line printed at the end. The Workflow type is
    from history. The new application-level work is the `release` Signal and one
    `issue_refund` Activity at attempt 1, alongside the usual Workflow Task
    events. The result's `idempotency_key` is
-   `durable-refund-<sha256 of workflow_id:run_id>`.
+   `durable-refund-<sha256 of workflow_id:run_id>`. That `ActivityTaskStarted`
+   event's identity is the new Worker's `<pid>@refund-demo`, with a different
+   PID from the first Worker's earlier `WorkflowTaskStarted` events. While the
+   stage's last frame is up, a `stage_progress` Query returns
+   `phase: "completed"`.
+
+Every client the demo starts reports `<pid>@refund-demo` instead of the SDK
+default `<pid>@<hostname>`, so the machine's hostname never appears on the
+Workers tab or in event identities. Set `TEMPORAL_IDENTITY` to replace it; that
+value is used verbatim, so a Worker restart no longer shows a new PID.
 
 The Workflow's summary also shows its history size, which
 [When Event History grows](HISTORY_GROWTH.md) uses.

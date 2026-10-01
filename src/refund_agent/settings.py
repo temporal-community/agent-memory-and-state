@@ -36,6 +36,20 @@ def temporal_namespace() -> str:
     return os.getenv("TEMPORAL_NAMESPACE", "default")
 
 
+def temporal_identity() -> str:
+    """Return the identity every Temporal client in this process reports.
+
+    The SDK default is ``<pid>@<hostname>``, which puts the machine's hostname in
+    Temporal Web (the Workers tab and the identity on started and signaled
+    events). This keeps the PID, so a new Worker still shows up as a different
+    process, and replaces the hostname with a neutral name. A non-empty
+    TEMPORAL_IDENTITY is used verbatim instead, so every process that inherits
+    it reports the same identity.
+    """
+
+    return os.getenv("TEMPORAL_IDENTITY", "").strip() or f"{os.getpid()}@refund-demo"
+
+
 def task_queue() -> str:
     return os.getenv("TEMPORAL_TASK_QUEUE", "refund-demo")
 

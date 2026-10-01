@@ -23,6 +23,7 @@ from refund_agent.settings import (
     state_dir,
     task_queue,
     temporal_address,
+    temporal_identity,
     temporal_namespace,
     validate_stripe_key,
     worker_pid_file,
@@ -42,6 +43,7 @@ async def _client() -> Client:
     return await Client.connect(
         temporal_address(),
         namespace=temporal_namespace(),
+        identity=temporal_identity(),
     )
 
 
@@ -211,6 +213,9 @@ def _phase(rows: list[dict[str, object]], status: str) -> str:
     scheduled = [row.get("name") for row in rows if row.get("event") == "scheduled"]
     signals = [row.get("name") for row in rows if row.get("event") == "signal"]
     completed = [row.get("name") for row in rows if row.get("event") == "completed"]
+    if "issue_refund" in completed:
+        # Still running after the refund step, as in the --hold durable wait.
+        return "refund recorded"
     if "issue_refund" in scheduled:
         return "refund effect in flight"
     if "approve" in signals:
