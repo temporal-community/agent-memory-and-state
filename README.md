@@ -23,12 +23,14 @@ repeating a question.
 
 ![The durable demo's stage screen right after its Temporal Worker was killed. The left pane, Temporal Worker, reads WORKER GONE: its in-memory loop is gone, and Temporal still has the saved loop. The right pane, What Survives, shows what was read from Temporal just now: customer answers 2, completed lookups 2, next action issue refund. Below it, the offline ledger (Stripe stand-in) shows payment PAID and refund none.](assets/durable-saved.png)
 
-**Last verified: 2026-09-30.** One offline `uv run refund-demo stage` run, in
+**Last verified: 2026-10-01.** One offline `uv run refund-demo stage` run, in
 which the Worker was killed at `issue refund` and the new Worker completed the
-refund in the offline ledger; one measured live-model pass on GPT-5.6 Luna
-(offline ledger, 4 model calls, 2,845 tokens, $0.0009); and the offline tests
-and lint. Not re-run on this date: `--real` (Stripe test mode). The Claude path
-has not been run.
+refund in the offline ledger; one `--real` run, in which the new Worker's refund
+returned `succeeded` from Stripe test mode; one offline run each of
+`--simulate-stripe-retry` and `--simulate-stripe-timeout`; and the offline tests
+and lint. Not re-run on this date: the live-model pass, last measured on
+2026-09-30 on GPT-5.6 Luna (offline ledger, 4 model calls, 2,845 tokens,
+$0.0009). The Claude path has not been run.
 
 There is no agent framework. The point is to make the boundary between context,
 memory, and authoritative state visible.
@@ -220,7 +222,14 @@ Temporal can't see it. A 429, a 5xx, a connection error, or the 45-second client
 timeout fails that `agent_step` attempt, and its retry policy (up to 5 attempts
 per model turn, each inside a 60-second Activity timeout) tries again. Temporal
 Web shows the attempt count and last failure. Other 4xx errors fail the turn
-without a retry. The Stripe calls also set `max_network_retries = 0`.
+without a retry. The Stripe calls also set `max_network_retries = 0`. The
+refund call allows 3 seconds to connect and 10 seconds of silence from Stripe
+while reading, and `issue_refund` heartbeats while it waits, so a slow call is
+not taken for a lost Worker. A timeout, a connection error, a 409, a 429, or a
+5xx fails that attempt, and the next attempt reuses the same idempotency key,
+after Stripe's `Retry-After` wait if it sent one. Other 4xx errors fail the
+refund without a retry, and a `Stripe-Should-Retry` header overrides either
+choice.
 
 ## Run the guided demo
 

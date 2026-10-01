@@ -32,6 +32,7 @@ from refund_agent.fake_stripe import find_refund
 from refund_agent.settings import (
     agent_view_path,
     temporal_address,
+    temporal_identity,
     temporal_namespace,
     worker_pid_file,
 )
@@ -685,7 +686,11 @@ def _stage_build(
 
 
 async def watch(workflow_id: str) -> None:
-    client = await Client.connect(temporal_address(), namespace=temporal_namespace())
+    client = await Client.connect(
+        temporal_address(),
+        namespace=temporal_namespace(),
+        identity=temporal_identity(),
+    )
     with Live(screen=True, refresh_per_second=8) as live:
         while True:
             agent = _agent_panel(workflow_id)

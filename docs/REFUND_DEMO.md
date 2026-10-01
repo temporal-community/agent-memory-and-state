@@ -69,6 +69,7 @@ The model and refund effect are independent:
 | `TEMPORAL_ADDRESS` | Temporal endpoint, default `localhost:7233` |
 | `TEMPORAL_NAMESPACE` | Temporal namespace |
 | `TEMPORAL_TASK_QUEUE` | Worker task queue |
+| `TEMPORAL_IDENTITY` | Client identity shown in Temporal Web, used verbatim by every process. Unset, each process reports `<pid>@refund-demo` instead of the SDK's `<pid>@<hostname>` |
 | `DEMO_STATE_DIR` | Offline ledger, views, logs, and local state |
 
 Test live model behavior without Stripe first:

@@ -35,6 +35,28 @@ _MODEL_RETRY = RetryPolicy(
 )
 
 
+def refund_activity_timeouts(request: RefundRequest) -> tuple[timedelta, timedelta]:
+    """Return the issue_refund (heartbeat, start-to-close) timeouts.
+
+    The heartbeat timeout is the Worker-loss detection window: after that long
+    without a heartbeat, Temporal starts the next attempt. issue_refund
+    heartbeats every second while it waits on Stripe, so a slow call keeps its
+    attempt alive. Only the stage's simulated failures, where the runner kills
+    the Worker mid-Activity, use 3 s so attempt 2 appears within seconds. Every
+    other run keeps 15 s.
+    """
+
+    simulated_loss = request.simulate_stripe_timeout or request.simulate_stripe_retry
+    heartbeat_seconds = 3 if request.fast_recovery and simulated_loss else 15
+    # Start-to-close bounds one attempt and stays above both the heartbeat
+    # timeout and the Stripe client timeout.
+    start_to_close_minutes = 6 if request.fast_recovery else 1
+    return (
+        timedelta(seconds=heartbeat_seconds),
+        timedelta(minutes=start_to_close_minutes),
+    )
+
+
 @workflow.defn(name="RefundApprovalAgent")
 class RefundWorkflow:
     """A plain agent loop expressed as durable orchestration.
@@ -163,8 +185,7 @@ class RefundWorkflow:
             workflow.logger.info("EXECUTION STATE | phase=issuing_refund")
 
         # EXTERNAL EFFECT: retries reuse one Stripe idempotency key.
-        heartbeat_timeout = timedelta(seconds=3 if request.fast_recovery else 15)
-        start_to_close_timeout = timedelta(minutes=6 if request.fast_recovery else 1)
+        heartbeat_timeout, start_to_close_timeout = refund_activity_timeouts(request)
         result = await workflow.execute_activity(
             issue_refund,
             args=[request, decision, self.working_memory],
@@ -174,9 +195,10 @@ class RefundWorkflow:
             # run. Kept generous so a slow restart on stage still resumes to one
             # refund instead of failing.
             schedule_to_close_timeout=timedelta(minutes=10),
-            # Heartbeat timeout is the worker-loss detection window. It must exceed
-            # the real Stripe call latency so a slow network call is not mistaken
-            # for a dead Worker, while staying short enough to detect a real loss.
+            # Heartbeat timeout is the Worker-loss detection window: 15 s, or 3 s
+            # on the stage's simulated-failure paths. issue_refund heartbeats
+            # while it waits on Stripe, so a slow call is not taken for a lost
+            # Worker.
             heartbeat_timeout=heartbeat_timeout,
             retry_policy=RetryPolicy(
                 initial_interval=timedelta(seconds=1),
@@ -188,11 +210,15 @@ class RefundWorkflow:
         if request.hold_after_effect:
             # DURABLE WAIT after the effect: the refund is already recorded, so a
             # restart here replays that completed step instead of repeating it.
+            self.stage_phase_value = "holding_after_effect"
             workflow.logger.info(
                 "EXECUTION STATE | phase=holding_after_effect | DURABLE WAIT"
             )
             await workflow.wait_condition(lambda: self.released)
 
+        # The refund step is recorded and nothing is left to wait on. The phase is
+        # Query state, not a command, so setting it is replay-safe.
+        self.stage_phase_value = "completed"
         return result
 
     async def _run_tool(self, tool: str | None, request: RefundRequest) -> dict:

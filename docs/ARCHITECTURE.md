@@ -92,13 +92,15 @@ if request.hold_before_effect:
     # same point every time. The stage sends `release` after the restart.
     await workflow.wait_condition(lambda: self.released)
 
+# 15 s heartbeat; issue_refund heartbeats while it waits on Stripe. Only the
+# stage's --simulate-stripe-* runs use 3 s. Stage runs get a 6 min
+# start-to-close, others 1 min.
+heartbeat_timeout, start_to_close_timeout = refund_activity_timeouts(request)
 return await workflow.execute_activity(
     issue_refund,
     args=[request, decision, self.working_memory],
-    # Stage runs set fast_recovery: 3 s heartbeat, 6 min start-to-close.
-    # Otherwise 15 s and 1 min.
-    heartbeat_timeout=timedelta(seconds=3 if request.fast_recovery else 15),
-    start_to_close_timeout=timedelta(minutes=6 if request.fast_recovery else 1),
+    heartbeat_timeout=heartbeat_timeout,
+    start_to_close_timeout=start_to_close_timeout,
     schedule_to_close_timeout=timedelta(minutes=10),
     retry_policy=RetryPolicy(maximum_attempts=10, ...),
 )

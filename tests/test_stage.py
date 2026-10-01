@@ -1,6 +1,8 @@
 import asyncio
 import io
 import json
+import os
+from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -10,9 +12,10 @@ pytest.importorskip("rich")
 
 from rich.console import Console
 from temporalio.api.history.v1 import History
+from temporalio.client import Client
 
 from refund_agent import tui
-from refund_agent.cli import _parser
+from refund_agent.cli import _parser, _phase
 from refund_agent.naive_refund import _read_real_stripe_state
 from refund_agent.settings import agent_view_path
 from refund_agent.stage import (
@@ -21,9 +24,12 @@ from refund_agent.stage import (
     _display_path,
     _drive_naive_loop,
     _drive_naive_replacement,
+    _drive_temporal_loop,
     _durable_frame,
+    _durable_request,
     _intro,
     _live_model_provider,
+    _loop_steps_from_progress,
     _naive_ledger,
     _roles,
     _Services,
@@ -34,6 +40,7 @@ from refund_agent.stage import (
     _wait_for_log_text,
     run,
 )
+from refund_agent.workflow import refund_activity_timeouts
 
 
 class _FakeProcess:
@@ -537,3 +544,117 @@ def test_stage_cleanup_preserves_a_different_worker_pid(tmp_path) -> None:
     services.close()
 
     assert pid_path.read_text(encoding="utf-8") == "9999\n"
+
+
+class _ConnectReached(Exception):
+    pass
+
+
+def test_every_temporal_client_reports_the_neutral_identity(
+    tmp_path, monkeypatch
+) -> None:
+    from refund_agent import cli, stage, worker
+
+    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("DOTENV_PATH", str(tmp_path / "absent.env"))
+    monkeypatch.delenv("TEMPORAL_IDENTITY", raising=False)
+    monkeypatch.delenv("STRIPE_API_KEY", raising=False)
+    identities: list[str | None] = []
+
+    async def fake_connect(*_args, **kwargs):
+        identities.append(kwargs.get("identity"))
+        raise _ConnectReached
+
+    monkeypatch.setattr(Client, "connect", fake_connect)
+    services = stage._Services(
+        base_state=tmp_path, stage_state=tmp_path, task_queue="identity-test"
+    )
+    connects = (
+        worker.run_worker,
+        cli._client,
+        services._connect,
+        lambda: tui.watch("identity-test"),
+    )
+    for connect in connects:
+        with pytest.raises(_ConnectReached):
+            asyncio.run(connect())
+
+    # The Worker passes no identity of its own, so it reports this one.
+    assert identities == [f"{os.getpid()}@refund-demo"] * len(connects)
+
+
+@pytest.mark.parametrize(
+    ("retry", "timeout", "heartbeat_seconds"),
+    [(False, False, 15), (True, False, 3), (False, True, 3)],
+)
+def test_stage_uses_the_short_heartbeat_only_on_its_failure_simulations(
+    retry, timeout, heartbeat_seconds
+) -> None:
+    request = _durable_request(
+        workflow_id="talk-refund-test",
+        payment_intent="pi_test",
+        amount_cents=8000,
+        reason="Please refund order 1234.",
+        real=True,
+        real_model=False,
+        model_provider=None,
+        simulate_stripe_retry=retry,
+        simulate_stripe_timeout=timeout,
+    )
+
+    heartbeat, _ = refund_activity_timeouts(request)
+
+    assert request.fast_recovery
+    assert request.hold_before_effect is not timeout
+    assert heartbeat == timedelta(seconds=heartbeat_seconds)
+
+
+class _ProgressHandle:
+    def __init__(self, progress: dict) -> None:
+        self.progress = progress
+
+    async def query(self, _query) -> dict:
+        return self.progress
+
+    async def signal(self, *_args, **_kwargs) -> None:
+        pass
+
+
+_RECORDED_LOOP = [
+    {"tool": "customer_answer", "result": {"question_id": "item_opened"}},
+    {"tool": "lookup_order", "result": {"item": "plush python"}},
+]
+
+
+@pytest.mark.parametrize("phase", ["holding_after_effect", "completed"])
+def test_stage_poll_stops_once_the_refund_step_is_recorded(phase) -> None:
+    handle = _ProgressHandle(
+        {"phase": phase, "pending_question": None, "working_memory": _RECORDED_LOOP}
+    )
+
+    outcome, steps = asyncio.run(_drive_temporal_loop(handle, {}, timeout=1))
+
+    assert outcome == "completed"
+    # The refund is done, so there is no next action left to show.
+    assert [step["kind"] for step in steps] == ["answer", "tool"]
+
+
+@pytest.mark.parametrize("phase", ["ready_to_refund", "issuing_refund"])
+def test_stage_loop_shows_the_refund_as_next_until_it_is_recorded(phase) -> None:
+    steps = _loop_steps_from_progress({"phase": phase, "working_memory": []})
+
+    assert steps == [
+        {"kind": "ready", "label": "Next action", "result": "issue refund"}
+    ]
+
+
+def test_history_phase_says_recorded_once_the_refund_step_completes() -> None:
+    rows = [
+        {"event": "scheduled", "name": "issue_refund"},
+        {"event": "started", "name": "issue_refund"},
+    ]
+
+    assert _phase(rows, "RUNNING") == "refund effect in flight"
+    rows.append({"event": "completed", "name": "issue_refund"})
+    assert _phase(rows, "RUNNING") == "refund recorded"
+    assert _phase(rows, "COMPLETED") == "completed"

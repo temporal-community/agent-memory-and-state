@@ -21,6 +21,7 @@ from refund_agent.settings import (
     load_env_file,
     task_queue,
     temporal_address,
+    temporal_identity,
     temporal_namespace,
     validate_stripe_key,
     worker_pid_file,
@@ -47,9 +48,12 @@ async def run_worker() -> None:
     )
 
     try:
+        # The Worker leaves its own identity unset, so it reports this client
+        # identity on its pollers and on the Tasks it starts.
         client = await Client.connect(
             temporal_address(),
             namespace=temporal_namespace(),
+            identity=temporal_identity(),
         )
         # The Activities use blocking SDKs, so the Temporal skill recommends
         # synchronous Activities with an explicit thread executor.

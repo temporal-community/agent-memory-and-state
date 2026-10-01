@@ -31,6 +31,7 @@ from refund_agent.settings import (
     agent_view_path,
     state_dir,
     temporal_address,
+    temporal_identity,
     temporal_namespace,
     validate_stripe_key,
     worker_pid_file,
@@ -225,6 +226,7 @@ class _Services:
         return await Client.connect(
             temporal_address(),
             namespace=temporal_namespace(),
+            identity=temporal_identity(),
         )
 
     async def start_worker(self) -> None:
@@ -629,6 +631,8 @@ def _loop_steps_from_progress(progress: dict) -> list[dict[str, str]]:
                     else "not eligible",
                 }
             )
+    # Once the refund step is recorded (holding_after_effect, completed) there is
+    # no next action, as in tui._loop_steps_from_history.
     if progress.get("phase") in {"ready_to_refund", "issuing_refund"}:
         steps.append(
             {"kind": "ready", "label": "Next action", "result": "issue refund"}
@@ -678,6 +682,9 @@ async def _drive_temporal_loop(
             return "ready", _loop_steps_from_progress(last_progress)
         elif phase == "issuing_refund":
             return "issuing", _loop_steps_from_progress(last_progress)
+        elif phase in {"holding_after_effect", "completed"}:
+            # Past the refund already, so stop polling instead of timing out.
+            return "completed", _loop_steps_from_progress(last_progress)
         elif phase == "denied":
             return "denied", _loop_steps_from_progress(last_progress)
         await asyncio.sleep(0.1)
@@ -733,6 +740,41 @@ async def _denied_frame(
         setup=setup,
     )
     return tui._stage_build(agent, system, setup=setup)
+
+
+def _durable_request(
+    *,
+    workflow_id: str,
+    payment_intent: str,
+    amount_cents: int,
+    reason: str,
+    real: bool,
+    real_model: bool,
+    model_provider: str | None,
+    simulate_stripe_retry: bool,
+    simulate_stripe_timeout: bool,
+) -> RefundRequest:
+    """Build the Demo 2 Workflow input for the selected stage path."""
+
+    return RefundRequest(
+        request_id=workflow_id,
+        order_id="order-1234",
+        customer_id="cus_demo_42",
+        payment_intent_id=payment_intent,
+        amount_cents=amount_cents,
+        reason=reason,
+        dry_run=not real,
+        item_opened=None,
+        damage=None,
+        refund_destination="Original card",
+        interactive_questions=True,
+        hold_before_effect=not simulate_stripe_timeout,
+        fast_recovery=True,
+        simulate_stripe_timeout=simulate_stripe_timeout,
+        simulate_stripe_retry=simulate_stripe_retry,
+        use_canned_agent=not real_model,
+        model_provider=model_provider,
+    )
 
 
 async def run(
@@ -886,23 +928,16 @@ async def run(
             await _durable_frame(client, workflow_id, setup=setup),
             "Ask for a refund (order 1234, the plush python)",
         )
-        request = RefundRequest(
-            request_id=workflow_id,
-            order_id="order-1234",
-            customer_id="cus_demo_42",
-            payment_intent_id=payment_intent,
+        request = _durable_request(
+            workflow_id=workflow_id,
+            payment_intent=payment_intent,
             amount_cents=amount_cents,
             reason=durable_request,
-            dry_run=not real,
-            item_opened=None,
-            damage=None,
-            refund_destination="Original card",
-            interactive_questions=True,
-            hold_before_effect=not simulate_stripe_timeout,
-            fast_recovery=True,
-            simulate_stripe_timeout=simulate_stripe_timeout,
-            use_canned_agent=not real_model,
+            real=real,
+            real_model=real_model,
             model_provider=selected_provider,
+            simulate_stripe_retry=simulate_stripe_retry,
+            simulate_stripe_timeout=simulate_stripe_timeout,
         )
         handle = await client.start_workflow(
             RefundWorkflow.run,
