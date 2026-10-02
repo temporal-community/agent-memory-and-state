@@ -78,7 +78,7 @@ Test live model behavior without Stripe first:
 uv run refund-demo stage --real-model --model-provider anthropic
 ```
 
-The stage fixture always represents order 1234, an $80 plush python that is
+The stage fixture always represents order 1234, an $80 python plushy that is
 explicitly eligible for a refund without a physical return. A request for a
 different item can correctly be denied by a live model. On denial, the stage
 shows the model's rationale and confirms that no refund was issued. If `--real`

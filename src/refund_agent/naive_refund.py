@@ -146,7 +146,7 @@ def _run_interactive_agent_loop() -> None:
             "kind": "tool",
             "tool": "lookup_order",
             "label": "Found order",
-            "result": "plush python",
+            "result": "python plushy",
         }
     )
     _loop_event(
@@ -341,7 +341,7 @@ def _process_interactive(
         {
             "kind": "tool",
             "label": "Found order",
-            "result": "plush python",
+            "result": "python plushy",
         },
         {
             "kind": "tool",
@@ -378,8 +378,13 @@ def _demo_frame(
         if agent.get("_worker_gone"):
             left.append("PROCESS GONE\n\n", style="bold red")
             left.append(
-                "It held the answers and next step.\n\nThey are gone with it.",
+                "It held the answers and next step.\n\nThey are gone with it.\n\n",
                 style="red",
+            )
+            # The presenter's cue says "submit", so the screen says who stopped it.
+            left.append(
+                "The demo stops the process here,\nbefore the refund reaches Stripe.",
+                style="dim",
             )
         else:
             left.append("Welcome back, Nyghtowl\n\n", style="bold cyan")
@@ -422,7 +427,7 @@ def _demo_frame(
 
     right = Text()
     right.append("LAST ORDER\n", style="bold")
-    right.append("  Plush python · $80.00\n\n")
+    right.append("  Python plushy · $80.00\n\n")
     right.append(f"{setup.effect_heading}\n", style="bold green")
     right.append(f"  Payment: {agent.get('_payment_status', 'PAID')}\n")
     if not ledger:
@@ -462,7 +467,7 @@ def _demo_frame(
         explanation_title = "THE CUSTOMER STARTS OVER"
     elif any(step.get("kind") == "ready" for step in agent.get("_loop_steps") or []):
         explanation = (
-            "Next step: issue the refund. The demo pauses here, before Stripe.\n"
+            "Next step: submit the refund.\n"
             "The answers and next step exist only inside this process."
         )
         explanation_title = "WORK NOT SAVED"

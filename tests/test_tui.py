@@ -25,7 +25,7 @@ from refund_agent.naive_refund import _demo_frame, _process_interactive
 _CACHED_STEPS = [
     {"kind": "answer", "question_id": "item_opened", "result": "Yes"},
     {"kind": "answer", "question_id": "damage", "result": "Split seam"},
-    {"kind": "tool", "label": "Found order", "result": "plush python"},
+    {"kind": "tool", "label": "Found order", "result": "python plushy"},
     {"kind": "tool", "label": "Checked refund history", "result": "clean"},
     {"kind": "ready", "label": "Next action", "result": "issue refund"},
 ]
@@ -88,7 +88,7 @@ def _recorded_loop(
     activity("agent_step", AgentStep(action="ask_customer", question_id="damage"))
     answer("damage", "Split seam")
     activity("agent_step", AgentStep(action="use_tool", tool="lookup_order"))
-    activity("lookup_order", {"item": "plush python"})
+    activity("lookup_order", {"item": "python plushy"})
     activity("agent_step", AgentStep(action="use_tool", tool="lookup_customer_history"))
     activity("lookup_customer_history", {"prior_refunds": []})
     activity("agent_step", AgentStep(action="decide", recommendation=recommendation))
@@ -466,13 +466,13 @@ def test_naive_worker_gone_is_a_visible_stage_beat() -> None:
 def test_naive_agent_loop_reaches_the_refund_before_stripe_is_called() -> None:
     frame = _demo_frame(
         {
-            "user_message": "Please refund my plush python",
+            "user_message": "Please refund my python plushy",
             "context": {"order": "1234", "amount": 8000, "customer": "42"},
             "memory": {"tenure_days": 824, "prior_refunds": 1},
             "_loop_steps": [
                 {"kind": "answer", "question_id": "item_opened", "result": "Yes"},
                 {"kind": "answer", "question_id": "damage", "result": "Split seam"},
-                {"kind": "tool", "label": "Found order", "result": "plush python"},
+                {"kind": "tool", "label": "Found order", "result": "python plushy"},
                 {"kind": "ready", "result": "issue refund"},
             ],
         },
@@ -483,12 +483,12 @@ def test_naive_agent_loop_reaches_the_refund_before_stripe_is_called() -> None:
     Console(file=output, width=128).print(frame)
     text = output.getvalue()
 
-    assert "Please refund my plush python" in text
+    assert "Please refund my python plushy" in text
     assert "AGENT LOOP" in text
     assert "✓ Damage: Split seam" in text
     assert "→ Next: issue refund" in text
     assert "WORK NOT SAVED" in text
-    assert "Next step: issue the refund. The demo pauses here, before Stripe." in text
+    assert "Next step: submit the refund." in text
     assert "The answers and next step exist only inside this process." in text
     assert "Press Enter" not in text
     assert "crash" not in text.lower()
@@ -527,7 +527,7 @@ def test_naive_status_check_cannot_recover_working_memory_from_stripe() -> None:
 def test_naive_status_check_does_not_invent_a_refund() -> None:
     agent: dict = {}
     ledger: list = []
-    _process_interactive(agent, ledger, "Please refund my plush python")
+    _process_interactive(agent, ledger, "Please refund my python plushy")
 
     replacement_agent: dict = {"_restarted": True}
     _process_interactive(replacement_agent, ledger, "Did I get my refund?")

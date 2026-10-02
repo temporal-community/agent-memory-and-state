@@ -24,7 +24,7 @@ SETUP = tui.DemoSetup()
 DEMO_LOOP_STEPS = [
     {"kind": "answer", "question_id": "item_opened", "result": "Yes"},
     {"kind": "answer", "question_id": "damage", "result": "Split seam"},
-    {"kind": "tool", "label": "Found order", "result": "plush python"},
+    {"kind": "tool", "label": "Found order", "result": "python plushy"},
     {"kind": "tool", "label": "Checked refund history", "result": "clean"},
     {"kind": "ready", "label": "Next action", "result": "issue refund"},
 ]
