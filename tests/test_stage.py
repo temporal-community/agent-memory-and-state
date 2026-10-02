@@ -282,11 +282,11 @@ def test_worker_gone_frame_shows_the_loop_read_from_temporal_just_now(
 
 
 def test_stage_accepts_a_spoken_refund_request(monkeypatch) -> None:
-    monkeypatch.setattr("builtins.input", lambda _prompt: "refund my plush python")
+    monkeypatch.setattr("builtins.input", lambda _prompt: "refund my python plushy")
 
     request = _ask_for_refund(_FakeConsole(), object(), "Ask for a refund")
 
-    assert request == "refund my plush python"
+    assert request == "refund my python plushy"
 
 
 def test_stage_keeps_enter_as_a_refund_shortcut(monkeypatch) -> None:
@@ -425,7 +425,7 @@ def test_demo_one_cues_say_literally_what_enter_does(tmp_path, monkeypatch) -> N
         "Ask for a refund\nyou>",
         "agent> Was the package opened? [Yes]",
         "agent> What was damaged? [Split seam]",
-        "Press Enter to kill this agent process (before it calls Stripe)",
+        "Press Enter to submit the refund",
         "Press Enter to start a new agent process",
         "Ask the new process: What happened to my refund?\nyou>",
         "Press Enter for Demo 2: the same test with Temporal",
@@ -444,7 +444,7 @@ def test_naive_worker_runs_questions_and_waits_before_refund(
             _drive_naive_loop(
                 _FakeConsole(),
                 process,
-                request_text="refund my plush python",
+                request_text="refund my python plushy",
                 amount_cents=8000,
             )
         )
@@ -622,7 +622,7 @@ class _ProgressHandle:
 
 _RECORDED_LOOP = [
     {"tool": "customer_answer", "result": {"question_id": "item_opened"}},
-    {"tool": "lookup_order", "result": {"item": "plush python"}},
+    {"tool": "lookup_order", "result": {"item": "python plushy"}},
 ]
 
 

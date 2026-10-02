@@ -9,7 +9,7 @@ the runner does and what each option needs.
 
 The guided runner:
 
-1. Welcomes Nyghtowl back and shows the last plush-python order as `PAID`.
+1. Welcomes Nyghtowl back and shows the last python-plushy order as `PAID`.
 2. Lets you ask for a refund. The naive agent process asks two scripted
    questions (press Enter to accept each suggested answer), reports two
    lookups, and chooses `issue refund`.
@@ -23,7 +23,7 @@ The guided runner:
    (`THE CUSTOMER STARTS OVER`).
 5. Starts the durable Workflow and replays your Demo 1 answers into it as
    `answer_question` Signals; the screen says "Reusing your Demo 1 answers so
-   you don't type them twice." The lookups run as Activities.
+   you don't type them twice..." The lookups run as Activities.
 6. Kills the Worker at the same next action. The `WORKER GONE` frame reads Event
    History from Temporal, which needs no Worker, and shows two customer
    answers, two completed lookups, and `Next action: issue refund` under
@@ -33,7 +33,7 @@ The guided runner:
    issues the refund, and reports completion.
 
 Every input prompt says literally what Enter does next, such as
-`Press Enter to kill this Worker (before it calls Stripe)`, and each demo's
+`Press Enter to submit the refund`, and each demo's
 header has a dim line naming what is scripted.
 
 It uses a deterministic policy and offline Stripe-like ledger by default; the
@@ -82,8 +82,8 @@ scan found no outstanding recognized demo payment.
 ## Testing a live model
 
 Test a live model against the offline ledger before combining it with `--real`.
-The demo uses a fixed, refund-eligible plush-python order, so the spoken request
-should refer to order 1234 or the plush python. Its policy record explicitly says
+The demo uses a fixed, refund-eligible python-plushy order, so the spoken request
+should refer to order 1234 or the python plushy. Its policy record explicitly says
 that this low-value damaged item does not require a physical return. If a live
 model denies a conflicting request, the stage shows its rationale and the fact
 that no refund was issued instead of exiting on an empty screen.

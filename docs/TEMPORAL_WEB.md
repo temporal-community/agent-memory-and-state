@@ -49,7 +49,7 @@ is `talk-refund-<token>`, where `<token>` matches the `stage-<token>` folder in
 the `Stage logs:` line printed at the end. The Workflow type is
 `RefundApprovalAgent`.
 
-1. At `Press Enter to kill this Worker (before it calls Stripe)`, open the
+1. At `Press Enter to submit the refund`, open the
    Workflow, go to the Queries tab, and run `stage_progress`. It returns
    `phase: "ready_to_refund"`, two `customer_answer` entries (with the default
    answers, `item_opened`: `Yes` and `damage`: `Split seam`), and the

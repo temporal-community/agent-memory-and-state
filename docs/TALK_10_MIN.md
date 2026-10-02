@@ -103,7 +103,7 @@ Point to the agent view on the left and the effect owner on the right.
 
 **Say before sending the request**
 
-“Nyghtowl already bought the plush python. Stripe says the payment is paid. The
+“Nyghtowl already bought the python plushy. Stripe says the payment is paid. The
 left side is the agent process; the right side, What Survives, is what Stripe
 actually knows.”
 
@@ -115,7 +115,7 @@ both demos take the same steps; the dim third header line says so
 `--real`). Press Enter through two prefilled answers: whether the package was
 opened and what was damaged. Pause after two automatic lookups when the screen
 says `Next: issue refund` and `The demo pauses here, before Stripe.`, then press
-Enter at `Press Enter to kill this agent process (before it calls Stripe)`.
+Enter at `Press Enter to submit the refund`.
 
 **Say over the completed-loop frame**
 
@@ -180,7 +180,7 @@ don't type them twice.” On the saved-loop frame, point out:
 - Stripe: payment paid; `Refund: none`.
 - The left shows what this Worker sees; the right shows what survives it.
 
-The live request must refer to order 1234 or the plush python. The stage's fixed
+The live request must refer to order 1234 or the python plushy. The stage's fixed
 policy record says this low-value damaged item is eligible without a physical
 return. Asking to refund a different item may correctly produce a denial.
 Rehearse the live model against the offline ledger before adding `--real`.
@@ -192,7 +192,7 @@ completed observations and chosen next action now have a durable owner.”
 
 **Action**
 
-Press Enter at `Press Enter to kill this Worker (before it calls Stripe)`. The
+Press Enter at `Press Enter to submit the refund`. The
 `WORKER GONE` frame reads Temporal's history as it draws, which can take up to
 three seconds. Hold it for three seconds once it appears, and point at
 `Read from Temporal just now:` on the right.

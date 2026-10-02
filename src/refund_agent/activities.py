@@ -123,7 +123,7 @@ def lookup_order(order_id: str) -> OrderDetails:
 
     order = OrderDetails(
         order_id=order_id,
-        item="plush python",
+        item="python plushy",
         amount_cents=8000,
         status="delivered",
         purchased_at="2026-06-03",
@@ -143,7 +143,7 @@ def lookup_customer_history(customer_id: str) -> CustomerHistory:
         customer_id=customer_id,
         account_tenure_days=824,
         purchases=[
-            "2026-06-03, plush python, 8000 cents",
+            "2026-06-03, python plushy, 8000 cents",
             "2026-02-14, mechanical keyboard, 8900 cents",
             "2025-11-20, rubber duck, 2400 cents",
         ],

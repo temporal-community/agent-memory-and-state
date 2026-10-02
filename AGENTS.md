@@ -19,7 +19,7 @@ model.
 
 ## Narrative invariants
 
-- Nyghtowl starts with a paid plush-python order. In Stripe test mode, create the
+- Nyghtowl starts with a paid python-plushy order. In Stripe test mode, create the
   PaymentIntent before the first refund prompt so `PAID` is a real effect-owner
   record, not stage decoration.
 - In Stripe test mode, the replacement naive agent must retrieve the
@@ -67,8 +67,11 @@ model.
   as plain “Stripe”: its heading is `OFFLINE LEDGER (Stripe stand-in)`, and
   `STRIPE (test mode)` only with `--real`.
 - Give each stage frame one cue, carried by the input prompt. It says literally
-  what Enter does next (“kill,” “start”) and matches the frame that follows.
-  Stage-mode frames have no footer cue panel.
+  what Enter does next (“start”) and matches the frame that follows.
+  Stage-mode frames have no footer cue panel. The one exception is the crash
+  cue, which reads “Press Enter to submit the refund” in both demos so the
+  presenter never says “kill”: the frame that follows must say, in dim text,
+  that the demo stopped the process or Worker before the refund reached Stripe.
 - A label that says a value was read from Temporal after the kill must be
   backed by an Event History read, as `loop_from_history` does, never by a
   cached Query result. Keep the cached-fallback label distinct.
@@ -94,6 +97,16 @@ model.
   shorter than the `agent_step` start-to-close timeout, and keep
   `stripe.max_network_retries = 0`. The Temporal Activity retry policy is the
   only retry layer, so every retry is visible in Temporal.
+- Keep the Stripe refund call's client timeout (`STRIPE_TIMEOUT_SECONDS`: 3 s
+  to connect, 10 s to read, per socket operation) shorter than the
+  `issue_refund` start-to-close timeout, and keep `issue_refund` heartbeating
+  every second while it waits (`_call_with_heartbeats`). A slow call is then
+  not taken for a lost Worker, and a hung one fails and retries with the same
+  idempotency key. The heartbeat timeout is 15 s, or 3 s on the stage's
+  simulated-failure paths.
+- Pass `temporal_identity()` to every Temporal client, so each process reports
+  `<pid>@refund-demo` (or `TEMPORAL_IDENTITY` verbatim) and the machine's
+  hostname never shows in Temporal Web.
 - Never print, commit, or expose values from `.env` or API-key environment
   variables.
 - Do not run a real-model or Stripe test-mode rehearsal unless the task calls

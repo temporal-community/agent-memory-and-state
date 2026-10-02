@@ -513,7 +513,7 @@ def _seed_test_payment(amount_cents: int) -> str:
         payment_method="pm_card_visa",
         payment_method_types=["card"],
         confirm=True,
-        description="plush python (durable refund demo)",
+        description="python plushy (durable refund demo)",
     )
     return str(intent.id)
 
@@ -608,7 +608,7 @@ def _loop_steps_from_progress(progress: dict) -> list[dict[str, str]]:
                     "kind": "tool",
                     "tool": tool,
                     "label": "Found order",
-                    "result": str(result.get("item") or "plush python"),
+                    "result": str(result.get("item") or "python plushy"),
                 }
             )
         elif tool == "lookup_customer_history":
@@ -701,6 +701,7 @@ async def _durable_frame(
     pending_question: dict[str, str] | None = None,
     loop_from_history: bool = False,
     setup: DemoSetup | None = None,
+    stopped_before_refund: bool = False,
 ):
     # The talk path uses plain language. `refund-demo watch` keeps the detailed
     # execution vocabulary for technical exploration.
@@ -712,6 +713,7 @@ async def _durable_frame(
         refund_status=refund_status,
         loop_steps=loop_steps,
         pending_question=pending_question,
+        stopped_before_refund=stopped_before_refund,
     )
     setup = setup or tui.OFFLINE_SETUP
     system = await tui._stage_system_panel(
@@ -871,7 +873,7 @@ async def run(
                 stage_mode=True,
                 setup=setup,
             ),
-            "Press Enter to kill this agent process (before it calls Stripe)",
+            "Press Enter to submit the refund",
         )
         _stop_naive_worker(naive_worker)
         naive_worker = None
@@ -926,7 +928,7 @@ async def run(
         durable_request = _ask_for_refund(
             console,
             await _durable_frame(client, workflow_id, setup=setup),
-            "Ask for a refund (order 1234, the plush python)",
+            "Ask for a refund (order 1234, the python plushy)",
         )
         request = _durable_request(
             workflow_id=workflow_id,
@@ -1005,7 +1007,7 @@ async def run(
                     loop_steps=durable_steps,
                     setup=setup,
                 ),
-                "Press Enter to kill this Worker (before it calls Stripe)",
+                "Press Enter to submit the refund",
             )
 
             services.kill_worker()
@@ -1020,6 +1022,7 @@ async def run(
                     loop_steps=durable_steps,
                     loop_from_history=True,
                     setup=setup,
+                    stopped_before_refund=True,
                 ),
                 "Press Enter to start a new Worker",
             )
