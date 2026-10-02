@@ -41,9 +41,9 @@ from refund_agent.settings import (
 _HISTORY_READ_TIMEOUT_SECONDS = 3
 
 _LOOKUP_LABELS = {
-    "lookup_order": "Found order",
-    "lookup_customer_history": "Checked refund history",
-    "check_refund_policy": "Checked refund policy",
+    "lookup_order": "Order",
+    "lookup_customer_history": "Refund history",
+    "check_refund_policy": "Refund policy",
 }
 
 
@@ -304,10 +304,9 @@ def _append_loop_steps(
             }.get(step.get("question_id"), "Answer")
             body.append(f"  ✓ {label}: {step.get('result')}\n", style="green")
         elif kind == "tool":
-            body.append(
-                f"  ✓ {step.get('label')}: {step.get('result')}\n",
-                style="green",
-            )
+            # A lookup is what the agent looks up: the intro frame's MEMORY.
+            body.append(f"  ✓ {step.get('label')}: {step.get('result')}", style="green")
+            body.append(" (memory)\n", style="dim")
         elif kind == "ready":
             body.append(f"  → Next: {step.get('result')}\n", style="bold yellow")
     if pending_question:

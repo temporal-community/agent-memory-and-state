@@ -34,8 +34,8 @@ agent> What was damaged? [Split seam]
   AGENT LOOP
     ✓ Package opened: Yes
     ✓ Damage: Split seam
-    ✓ Found order: python plushy
-    ✓ Checked refund history: clean
+    ✓ Order: python plushy (memory)
+    ✓ Refund history: clean (memory)
     → Next: issue refund
   WORK NOT SAVED
     Next step: submit the refund.
@@ -75,8 +75,8 @@ Reusing your Demo 1 answers so you don't type them twice...
   TEMPORAL WORKER  AGENT LOOP
                      ✓ Package opened: Yes
                      ✓ Damage: Split seam
-                     ✓ Found order: python plushy
-                     ✓ Checked refund history: clean
+                     ✓ Order: python plushy (memory)
+                     ✓ Refund history: clean (memory)
                      → Next: issue refund
   WHAT SURVIVES    TEMPORAL        Saved so far:
                                    Customer answers: 2

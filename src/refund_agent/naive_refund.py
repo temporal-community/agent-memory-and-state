@@ -145,7 +145,7 @@ def _run_interactive_agent_loop() -> None:
         {
             "kind": "tool",
             "tool": "lookup_order",
-            "label": "Found order",
+            "label": "Order",
             "result": "python plushy",
         }
     )
@@ -153,7 +153,7 @@ def _run_interactive_agent_loop() -> None:
         {
             "kind": "tool",
             "tool": "lookup_customer_history",
-            "label": "Checked refund history",
+            "label": "Refund history",
             "result": "clean",
         }
     )
@@ -340,12 +340,12 @@ def _process_interactive(
         {"kind": "answer", "question_id": "damage", "result": "Split seam"},
         {
             "kind": "tool",
-            "label": "Found order",
+            "label": "Order",
             "result": "python plushy",
         },
         {
             "kind": "tool",
-            "label": "Checked refund history",
+            "label": "Refund history",
             "result": "clean",
         },
         {"kind": "ready", "label": "Next action", "result": "issue refund"},
