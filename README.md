@@ -12,14 +12,14 @@
 
 **What happens to an AI agent's in-flight work when its process dies?**
 
-This demo kills an agent one step before it refunds a customer. The failure
-mode is **lost loop position**. By then the agent has asked Nyghtowl two
-questions, looked up her order and refund history, and chosen `issue refund`.
-When the naive agent's process dies, that progress is lost, and the new
-process has no way to get it back, so Nyghtowl has to start the return again.
-The durable agent runs the same steps as a Temporal Workflow. A new Worker
-rebuilds the loop from Event History and resumes at `issue refund` without
-repeating a question.
+This demo kills a customer-support refund agent one step before it refunds
+the customer. The failure mode is **lost loop position**. By then the agent has
+asked the customer two questions, looked up the order and the customer's
+refund history, and chosen `issue refund`. When the naive agent's process dies,
+that progress is lost, and the new process has no way to get it back, so the
+customer has to start the return again. The durable agent runs the same steps
+as a Temporal Workflow. A new Worker rebuilds the loop from Event History and
+resumes at `issue refund` without repeating a question.
 
 ![The durable demo's stage screen right after its Temporal Worker was killed. The left pane, Temporal Worker, reads WORKER GONE: its in-memory loop is gone, and Temporal still has the saved loop. The right pane, What Survives, shows what was read from Temporal just now: customer answers 2, completed lookups 2, next action issue refund. Below it, the offline ledger (Stripe stand-in) shows payment PAID and refund none.](assets/durable-saved.png)
 
@@ -32,8 +32,10 @@ and lint. Not re-run on this date: the live-model pass, last measured on
 2026-09-30 on GPT-5.6 Luna (offline ledger, 4 model calls, 2,845 tokens,
 $0.0009). The Claude path has not been run.
 
-There is no agent framework. The point is to make the boundary between context,
-memory, and authoritative state visible.
+The point is to show what memory and execution state each do for an agent, and
+Temporal's role: it keeps the execution state outside the agent's process. See
+[Memory and execution state](#memory-and-execution-state). There is no agent
+framework, so the boundary stays visible.
 
 **What is real and what is staged:**
 
@@ -63,7 +65,7 @@ memory, and authoritative state visible.
 
 | Moment | Naive agent | Durable agent |
 | --- | --- | --- |
-| **Before the request** | Nyghtowl's python plushy shows as paid | The same paid order |
+| **Before the request** | The customer's python plushy order shows as paid | The same paid order |
 | **Agent loop** | A scripted process asks two questions, performs two lookups, and chooses `issue refund` | The same steps in a Temporal Workflow: answers are Signals, lookups are Activities |
 | **Process killed** | The naive agent process takes the answers and loop position with it; Stripe still says paid with no refund | The Worker is killed; completed observations and the next action remain in Event History |
 | **Agent reloads** | A new agent process correctly checks Stripe, but the customer starts over | A new Worker rebuilds the loop from Event History; **no repeated questions** |
@@ -85,31 +87,36 @@ written down in [The money moment](#the-money-moment), and the full cost is in
 Links, the code as presented, and further reading are in
 [Resources](#resources).
 
-## The boundary that matters
+## Memory and execution state
 
-The useful distinction is operational role and authority, not storage
-technology or lifespan. Ask one question:
+An agent needs both, and they do different jobs.
 
-> When two copies disagree, which record wins?
+| | What it helps with | In this demo | Where to find it |
+| --- | --- | --- | --- |
+| **Context** | What the model sees for this one decision | The refund request plus everything the agent has learned so far, sent on each turn | The input of each `agent_decide_next_step` Activity in Event History |
+| **Memory** | What the agent knows or can look up, so it can reason | The customer's two answers and the lookups: order 1234 and the refund history of the demo customer, Nyghtowl | Naive agent: a dict inside its process (`naive_refund.py`). Durable agent: `working_memory` in the Workflow (`workflow.py`), rebuilt from history after a restart |
+| **Execution state** | Where the work stands: which steps finished and what runs next, so the work can continue after a crash without redoing it | 2 answers, 2 lookups, next action `issue refund` | Temporal: the Workflow's Event History in the Temporal UI (http://localhost:8233), or `uv run refund-demo inspect <workflow-id>` |
+| **Effect state** | Whether the side effect really happened | Whether Stripe holds a refund for the payment | Stripe: the Dashboard in test mode, where the refund carries `temporal_workflow_id` (offline: the ledger) |
 
-| Role | What it answers | Authority |
-| --- | --- | --- |
-| **Context** | What does the model see for this decision? | Assembled for the current turn |
-| **Memory** | What retained or retrieved information does the agent use to reason? | The agent or its memory system |
-| **Execution state** | Where does the work stand? | Temporal |
-| **Effect state** | Did the refund actually commit? | Stripe |
-| **Authorization state** | May the agent act? | The authorization system |
-| **Domain state** | What are the business facts? | The application database |
+**Temporal's role.** Temporal keeps the execution state outside the agent's
+process. Each finished step is recorded in Event History as it happens: an
+answer arrives as a `customer_answer` Signal, and a model turn or a lookup
+finishes as an Activity. When the Worker dies, a new Worker replays that
+history, rebuilds the loop and `working_memory`, and continues at the next
+unfinished step without calling the finished ones again. Temporal doesn't
+decide what the agent does, doesn't make the model's answer right, and doesn't
+make the refund exactly once; the Stripe idempotency key does that.
 
-When the Worker disappears after the agent chooses the refund, Stripe proves
-the payment is still paid with no refund. (Offline, a fixed `PAID` label and
-the naive ledger stand in; see [What it is not](#what-it-is-not).) But Stripe
-never owned the answers or the loop's position, and recalled memory would not
-prove that `issue refund` is the next unfinished action. Temporal supplies
-that execution state here; a durable job table or a careful state machine can
-too. The stage leads with this case
-because its customer cost is visible; the [manual walkthrough](docs/REFUND_DEMO.md)
-covers the later loss, after Stripe commits. Read
+**Memory alone isn't enough.** A memory store could bring back the answers, but
+not where the work stands: whether `issue refund` is next, already running, or
+done. When two copies disagree, ask which record wins: Temporal for where the
+work stands, Stripe for whether money moved. A durable job table or a careful
+state machine can hold execution state too; in this demo, Temporal does.
+
+The stage leads with the crash before the refund because the customer's cost is
+visible; the [manual walkthrough](docs/REFUND_DEMO.md) covers the later loss,
+after Stripe commits. A real system also has authorization state (may the agent
+act?) and domain state (the business facts). Read
 [Memory, state, and authority](docs/CONCEPTS.md) for the complete model,
 including how one fact can play several roles, working and long-term memory,
 the lifespan framing, and the exactly-once misconception.
@@ -323,7 +330,7 @@ uv run refund-demo stage --simulate-stripe-timeout
 
 Both agents hit the same failure at the same point in the loop, with two
 different outcomes. The naive agent process is killed after choosing
-`issue refund` (`PROCESS GONE`). The new agent process tells Nyghtowl: "No
+`issue refund` (`PROCESS GONE`). The new agent process tells the customer: "No
 refund request reached Stripe. I lost your return answers. Please start the
 return again."
 
