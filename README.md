@@ -611,8 +611,8 @@ The demo ends on these, in the stage's closing frame:
   and next step lived only in its process, and they died with it.
 - **With Temporal, a new Worker picked up at the saved next action,**
   `issue refund`, without asking the customer again.
-- **Memory helps the agent decide. Temporal records where the work stands.
-  Stripe knows whether money moved.**
+- **Memory helps reasoning continue. Temporal helps the operation continue.**
+  Stripe, not either of them, knows whether money moved.
 
 And two things to keep in mind when you build your own:
 
