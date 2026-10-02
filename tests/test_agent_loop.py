@@ -270,8 +270,9 @@ def test_model_clients_leave_every_retry_to_temporal(monkeypatch) -> None:
     from refund_agent import activities
 
     # Both SDKs retry inside the call by default, where Temporal can't see it.
-    # The clients disable that, and their timeout must end before agent_step's
-    # 60 s start_to_close_timeout in workflow.py so Temporal sees the failure.
+    # The clients disable that, and their timeout must end before the 60 s
+    # agent_decide_next_step start_to_close_timeout in workflow.py so Temporal
+    # sees the failure.
     monkeypatch.delenv("LOG_MODEL_USAGE", raising=False)
     monkeypatch.setenv("OPENAI_MODEL", "test-model")
     monkeypatch.setenv("ANTHROPIC_MODEL", "test-claude")
@@ -724,7 +725,7 @@ async def _check_refund_phases(temporal: str) -> None:
 
     refund_may_return = asyncio.Event()
 
-    @activity.defn(name="agent_step")
+    @activity.defn(name="agent_decide_next_step")
     async def decide(request: RefundRequest, working_memory: list[dict]) -> AgentStep:
         return AgentStep(action="decide", recommendation="approve", rationale="")
 
@@ -784,6 +785,17 @@ async def _check_refund_phases(temporal: str) -> None:
                 == "issue_refund"
             ]
             assert scheduled.heartbeat_timeout.ToTimedelta() == timedelta(seconds=15)
+            # The names a viewer reads in Event History match the code on screen.
+            [turn] = [
+                event
+                for event in history.events
+                if event.HasField("activity_task_scheduled_event_attributes")
+                and event.activity_task_scheduled_event_attributes.activity_type.name
+                == "agent_decide_next_step"
+            ]
+            assert json.loads(turn.user_metadata.summary.data) == (
+                "Agent turn 1: decide the next step"
+            )
 
 
 def test_stage_progress_reports_completed_after_the_refund() -> None:

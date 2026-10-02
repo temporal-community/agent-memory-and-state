@@ -157,7 +157,7 @@ EXECUTION STATE | issuing refund: attempt 1, decision approve, idempotency key .
 THE SYSTEM | refund accepted at Stripe: re_dry_<16 hex> (dry-run, attempt 1)
 ```
 
-The second `Worker connected` line is the new Worker. No `agent_step`
-or lookup output follows it, because replay reads those results from Event
-History instead of running them again. In the default mode, "at Stripe" means
-the offline ledger.
+The second `Worker connected` line is the new Worker. No
+`agent_decide_next_step` or lookup output follows it, because replay reads
+those results from Event History instead of running them again. In the default
+mode, "at Stripe" means the offline ledger.

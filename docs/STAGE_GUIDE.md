@@ -22,7 +22,7 @@ The guided runner:
    Stripe without submitting a refund. The customer starts the return again
    (`THE CUSTOMER STARTS OVER`).
 5. Starts the durable Workflow and replays your Demo 1 answers into it as
-   `answer_question` Signals; the screen says "Reusing your Demo 1 answers so
+   `customer_answer` Signals; the screen says "Reusing your Demo 1 answers so
    you don't type them twice..." The lookups run as Activities.
 6. Kills the Worker at the same next action. The `WORKER GONE` frame reads Event
    History from Temporal, which needs no Worker, and shows two customer

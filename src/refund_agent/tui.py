@@ -520,7 +520,7 @@ async def _loop_steps_from_history(
             attributes = event.workflow_execution_signaled_event_attributes
             if attributes.signal_name == "approve":
                 approved = True
-            elif attributes.signal_name == "answer_question":
+            elif attributes.signal_name == "customer_answer":
                 question_id, answer = await converter.decode(attributes.input.payloads)
                 if question_id not in answered:
                     answered.add(question_id)
@@ -546,7 +546,7 @@ async def _loop_steps_from_history(
                         "result": "done",
                     }
                 )
-            elif name == "agent_step":
+            elif name == "agent_decide_next_step":
                 [step] = await converter.decode(attributes.result.payloads)
                 if step.get("action") == "decide":
                     recommendation = str(step.get("recommendation") or "escalate")

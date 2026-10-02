@@ -1,10 +1,10 @@
 """Activities contain every non-deterministic or fallible operation.
 
-The agent loop lives in the Workflow. Each turn it calls agent_step (the model),
-which either asks for a tool or reaches a decision. The tools (lookup_order,
-lookup_customer_history, check_refund_policy) retrieve domain records whose
-results become the agent's working memory, and issue_refund is the one external
-effect.
+The agent loop lives in the Workflow. Each turn it calls agent_decide_next_step
+(the model), which either asks for a tool or reaches a decision. The tools
+(lookup_order, lookup_customer_history, check_refund_policy) retrieve domain
+records whose results become the agent's working memory, and issue_refund is
+the one external effect.
 """
 
 from __future__ import annotations
@@ -586,7 +586,9 @@ def _anthropic_step(
 
 
 @activity.defn
-def agent_step(request: RefundRequest, working_memory: list[dict]) -> AgentStep:
+def agent_decide_next_step(
+    request: RefundRequest, working_memory: list[dict]
+) -> AgentStep:
     """MODEL REASONING: one turn of the agent loop."""
 
     workflow_id = activity.info().workflow_id

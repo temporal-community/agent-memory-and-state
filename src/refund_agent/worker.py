@@ -10,7 +10,7 @@ from temporalio.client import Client
 from temporalio.worker import Worker
 
 from refund_agent.activities import (
-    agent_step,
+    agent_decide_next_step,
     check_refund_policy,
     issue_refund,
     lookup_customer_history,
@@ -63,7 +63,7 @@ async def run_worker() -> None:
                 task_queue=task_queue(),
                 workflows=[RefundWorkflow],
                 activities=[
-                    agent_step,
+                    agent_decide_next_step,
                     lookup_order,
                     lookup_customer_history,
                     check_refund_policy,

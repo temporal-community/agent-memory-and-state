@@ -1,9 +1,10 @@
 """Deterministic orchestration for the refund agent loop.
 
-The loop is the agent: each turn the model (agent_step) looks at what it knows,
-plans, and either calls a tool or decides. Tool results update its view, and it
-repeats until it reaches a decision or runs out of turns. All non-deterministic
-work is in Activities, so the loop itself replays exactly after a restart.
+The loop is the agent: each turn the model (agent_decide_next_step) looks at
+what it knows, plans, and either calls a tool or decides. Tool results update
+its view, and it repeats until it reaches a decision or runs out of turns. All
+non-deterministic work is in Activities, so the loop itself replays exactly
+after a restart.
 """
 
 from dataclasses import asdict
@@ -15,7 +16,7 @@ from temporalio.exceptions import ApplicationError
 
 with workflow.unsafe.imports_passed_through():
     from refund_agent.activities import (
-        agent_step,
+        agent_decide_next_step,
         check_refund_policy,
         issue_refund,
         lookup_customer_history,
@@ -82,12 +83,13 @@ class RefundWorkflow:
 
         # OBSERVE, REASON, ACT: the loop runs until the agent decides.
         decision: RefundDecision | None = None
-        for _turn in range(MAX_TURNS):
+        for turn in range(MAX_TURNS):
             step = await workflow.execute_activity(
-                agent_step,
+                agent_decide_next_step,
                 args=[request, self.working_memory],
                 start_to_close_timeout=timedelta(seconds=60),
                 retry_policy=_MODEL_RETRY,
+                summary=f"Agent turn {turn + 1}: decide the next step",
             )
             if step.action == "decide":
                 decision = RefundDecision(
@@ -262,7 +264,7 @@ class RefundWorkflow:
         self.released = True
 
     @workflow.signal
-    def answer_question(self, question_id: str, answer: str) -> None:
+    def customer_answer(self, question_id: str, answer: str) -> None:
         """Record one customer answer as durable loop input."""
 
         self.customer_answers[question_id] = answer

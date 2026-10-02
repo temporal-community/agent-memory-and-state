@@ -152,7 +152,7 @@ flowchart LR
     end
     subgraph worker["Worker process: worker.py, killed then replaced"]
         wf["Workflow loop<br/>workflow.py"]
-        acts["Activities<br/>agent_step, 3 fixture lookups,<br/>issue_refund"]
+        acts["Activities<br/>agent_decide_next_step, 3 fixture lookups,<br/>issue_refund"]
     end
     naiveLedger[("Naive ledger, offline<br/>naive-ledger.json")]
     effectLedger[("Effect ledger, offline<br/>effect-ledger.json")]
@@ -183,18 +183,23 @@ issues one refund ([full walkthrough](docs/ARCHITECTURE.md#how-the-stage-is-wire
 Condensed from [`workflow.py`](src/refund_agent/workflow.py):
 
 ```python
-for _turn in range(MAX_TURNS):  # MAX_TURNS = 10
-    step = await workflow.execute_activity(agent_step, args=[request, self.working_memory], ...)
+for turn in range(MAX_TURNS):  # MAX_TURNS = 10
+    step = await workflow.execute_activity(
+        agent_decide_next_step,
+        args=[request, self.working_memory],
+        summary=f"Agent turn {turn + 1}: decide the next step",
+    )  # plus a timeout and retry policy
     if step.action == "decide":
         decision = RefundDecision(...)
         break
     if step.action == "ask_customer":
-        await workflow.wait_condition(answer_arrived)  # answer_question Signal
+        await workflow.wait_condition(answer_arrived)  # customer_answer Signal
         self.working_memory.append(customer_answer)
         continue
     result = await self._run_tool(step.tool, request)
     self.working_memory.append({"tool": step.tool, "result": result})
-return await workflow.execute_activity(issue_refund, ...)  # after approval and release waits
+# After the approval and release waits:
+return await workflow.execute_activity(issue_refund, ...)
 ```
 
 Answers arrive as Signals, every external call is an Activity, and a
@@ -205,17 +210,17 @@ timeouts, retry policies, and a side-by-side with a plain in-process loop.
 **Temporal owns retries.** The Anthropic and OpenAI clients are built with
 `max_retries=0`, because both SDKs otherwise retry inside the call, where
 Temporal can't see it. A 429, a 5xx, a connection error, or the 45-second client
-timeout fails that `agent_step` attempt, and its retry policy (up to 5 attempts
-per model turn, each inside a 60-second Activity timeout) tries again. Temporal
-Web shows the attempt count and last failure. Other 4xx errors fail the turn
-without a retry. The Stripe calls also set `max_network_retries = 0`. The
-refund call allows 3 seconds to connect and 10 seconds of silence from Stripe
-while reading, and `issue_refund` heartbeats while it waits, so a slow call is
-not taken for a lost Worker. A timeout, a connection error, a 409, a 429, or a
-5xx fails that attempt, and the next attempt reuses the same idempotency key,
-after Stripe's `Retry-After` wait if it sent one. Other 4xx errors fail the
-refund without a retry, and a `Stripe-Should-Retry` header overrides either
-choice.
+timeout fails that `agent_decide_next_step` attempt, and its retry policy (up to
+5 attempts per model turn, each inside a 60-second Activity timeout) tries
+again. Temporal Web shows the attempt count and last failure. Other 4xx errors
+fail the turn without a retry. The Stripe calls also set
+`max_network_retries = 0`. The refund call allows 3 seconds to connect and 10
+seconds of silence from Stripe while reading, and `issue_refund` heartbeats
+while it waits, so a slow call is not taken for a lost Worker. A timeout, a
+connection error, a 409, a 429, or a 5xx fails that attempt, and the next
+attempt reuses the same idempotency key, after Stripe's `Retry-After` wait if
+it sent one. Other 4xx errors fail the refund without a retry, and a
+`Stripe-Should-Retry` header overrides either choice.
 
 ## Run the guided demo
 
@@ -297,8 +302,9 @@ running (see above), watch it at <http://localhost:8233>:
 2. After the kill (`WORKER GONE`), open the History tab. The Workflow is still
    `Running`, with the two answers and completed lookups, no `issue_refund`, and
    no pending Activity. Don't run a Query now: Queries need a live Worker.
-3. After recovery, the Workflow is `Completed`. No `agent_step`, lookup, or
-   `answer_question` event repeats, and one `issue_refund` ran at attempt 1.
+3. After recovery, the Workflow is `Completed`. No `agent_decide_next_step`,
+   lookup, or `customer_answer` event repeats, and one `issue_refund` ran at
+   attempt 1.
 
 The [Temporal Web guide](docs/TEMPORAL_WEB.md#what-to-check-at-each-frame) has
 the full event list for each step.
@@ -333,13 +339,13 @@ continue."
 
 For proof beyond the stage screen, [Temporal Web](docs/TEMPORAL_WEB.md#what-to-check-at-each-frame)
 shows the Workflow still Running during `WORKER GONE` and no repeated
-`agent_step`, lookup, or `answer_question` event after the restart. There, the
-`issue_refund` `ActivityTaskStarted` event shows the new Worker's identity:
-`<pid>@refund-demo` with a new PID. If `TEMPORAL_IDENTITY` is set, that value
-is used verbatim, so both Workers show it. With `--real`, the ledger pane's
-heading reads `STRIPE (test mode)`, and the Stripe Dashboard shows one refund
-on the payment, with `temporal_workflow_id` and `temporal_idempotency_key` in
-its metadata.
+`agent_decide_next_step`, lookup, or `customer_answer` event after the
+restart. There, the `issue_refund` `ActivityTaskStarted` event shows the new
+Worker's identity: `<pid>@refund-demo` with a new PID. If `TEMPORAL_IDENTITY`
+is set, that value is used verbatim, so both Workers show it. With `--real`,
+the ledger pane's heading reads `STRIPE (test mode)`, and the Stripe Dashboard
+shows one refund on the payment, with `temporal_workflow_id` and
+`temporal_idempotency_key` in its metadata.
 
 The naive answer is not wrong: memory and Stripe are both useful. The contrast
 is whether the autonomous work itself still has a position:
@@ -418,7 +424,7 @@ measured calls, tokens, dollars, and date. -->
 
 Event History records every Activity's input and result; that record is how
 the replacement Worker resumes. This loop resends all of `working_memory` to
-`agent_step` each turn, so recorded bytes grow with the square of the turn
+`agent_decide_next_step` each turn, so recorded bytes grow with the square of the turn
 count. The demo stays under 7 KB of payloads (it stops at `MAX_TURNS = 10`),
 but a payload-only model with 20 KiB tool results and no turn cap crosses 4 MiB
 around turn 20, the 10 MiB warning around turn 32, and the 50 MiB limit around
@@ -467,6 +473,7 @@ Temporal server defaults, per the
 [Event History limits](https://docs.temporal.io/workflow-execution/event#event-history-limits).
 The [deep dive](docs/HISTORY_GROWTH.md) covers seeing growth in Temporal Web,
 both fixes and their pitfalls, Temporal Cloud limits, and all sources.
+The demo doesn't run continue-as-new; [what it looks like](docs/HISTORY_GROWTH.md#what-continue-as-new-looks-like-sketch) shows a sketch and its captured two-run Event History.
 
 ## How other products approach it
 
