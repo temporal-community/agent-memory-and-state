@@ -75,8 +75,10 @@ at exactly the point where the application owes work. The effect owner still
 has its authoritative record, but that record contains only what reached it.
 The README calls this failure mode lost loop position.
 
-In the naive stage demo, a scripted agent process asks two questions, performs
-two lookups, and chooses `issue refund` as its next action. The process is then
+In the naive stage demo, an agent process runs the same loop and decision step
+as the durable agent, with no Temporal: it asks two questions, performs the
+lookups the policy or model picks, and chooses `issue refund` as its next
+action. The process is then
 killed before calling Stripe. Its process-local working memory disappears too.
 A new agent process correctly finds a paid order with no refund in Stripe,
 but Stripe never owned Nyghtowl's answers, the completed observations, or the

@@ -207,6 +207,7 @@ class RefundWorkflow:
                 maximum_interval=timedelta(seconds=3),
                 maximum_attempts=10,
             ),
+            summary="Issue the refund in Stripe",
         )
 
         if request.hold_after_effect:
@@ -226,23 +227,28 @@ class RefundWorkflow:
     async def _run_tool(self, tool: str | None, request: RefundRequest) -> dict:
         # Dispatch is deterministic: the tool name came from a recorded result,
         # and the arguments come from the request, not from the model.
+        # Each summary names the step in plain words in Event History.
         if tool == "lookup_order":
             result = await workflow.execute_activity(
                 lookup_order,
                 request.order_id,
                 start_to_close_timeout=timedelta(seconds=10),
+                # "order-1234" reads as order 1234, as on the stage screen.
+                summary=f"Look up order {request.order_id.removeprefix('order-')}",
             )
         elif tool == "lookup_customer_history":
             result = await workflow.execute_activity(
                 lookup_customer_history,
                 request.customer_id,
                 start_to_close_timeout=timedelta(seconds=10),
+                summary="Look up the customer's refund history",
             )
         elif tool == "check_refund_policy":
             result = await workflow.execute_activity(
                 check_refund_policy,
                 request.order_id,
                 start_to_close_timeout=timedelta(seconds=10),
+                summary="Check the refund policy",
             )
         else:
             raise ApplicationError(

@@ -58,8 +58,12 @@ the `Stage logs:` line printed at the end. The Workflow type is
    `Running`. It shows two `WorkflowExecutionSignaled` (`customer_answer`)
    events, the completed `agent_decide_next_step`, `lookup_order`, and
    `lookup_customer_history` Activities, no `issue_refund`, and no pending
-   Activities. Each `agent_decide_next_step` row carries its summary, such as
-   `Agent turn 1: decide the next step`. This is the same history the stage's
+   Activities. Each Activity row carries a plain-words summary:
+   `Agent turn 1: decide the next step` for each model turn,
+   `Look up order 1234`, `Look up the customer's refund history`,
+   `Check the refund policy`, and, after recovery,
+   `Issue the refund in Stripe` (offline too, where the ledger stands in for
+   Stripe). This is the same history the stage's
    `WORKER GONE` pane reads. Don't run a Query now: Queries need a live Worker.
 3. After recovery, the Workflow is `Completed`. No `agent_decide_next_step`,
    lookup, or `customer_answer` event repeats, because the new Worker replayed

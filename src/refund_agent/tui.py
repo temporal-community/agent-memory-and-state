@@ -67,6 +67,9 @@ class DemoSetup:
 
     @property
     def naive_line(self) -> str:
+        # With --real-model, Demo 1 runs the same live model step as Demo 2.
+        if self.model_provider:
+            return self.durable_line
         return f"Scripted steps · {self._effect_note}"
 
     @property

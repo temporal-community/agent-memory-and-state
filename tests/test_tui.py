@@ -677,13 +677,13 @@ def test_naive_stage_frame_has_no_footer_cue() -> None:
         ),
         (
             tui.DemoSetup(real_stripe=True, model_provider="anthropic"),
-            "Scripted steps · Stripe test mode",
+            "Live model (anthropic) · sample lookups · Stripe test mode",
             "Live model (anthropic) · sample lookups · Stripe test mode",
             "STRIPE (test mode)",
         ),
         (
             tui.DemoSetup(model_provider="openai"),
-            "Scripted steps · offline ledger (no Stripe)",
+            "Live model (openai) · sample lookups · offline ledger (no Stripe)",
             "Live model (openai) · sample lookups · offline ledger (no Stripe)",
             "OFFLINE LEDGER (Stripe stand-in)",
         ),

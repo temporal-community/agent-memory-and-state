@@ -109,13 +109,15 @@ actually knows.”
 
 **Action**
 
-At the `you>` prompt, ask for a refund. The naive side is a scripted process, so
-both demos take the same steps; the dim third header line says so
-(`Scripted steps · Stripe test mode`, or `offline ledger (no Stripe)` without
-`--real`). Press Enter through two prefilled answers: whether the package was
-opened and what was damaged. Pause after two automatic lookups when the screen
-says `Next: issue refund` and `The demo pauses here, before Stripe.`, then press
-Enter at `Press Enter to submit the refund`.
+At the `you>` prompt, ask for a refund. The naive side runs the same decision
+step in its own process, so both demos take the same steps; the dim third
+header line says how (`Scripted steps · Stripe test mode`, or
+`offline ledger (no Stripe)` without `--real`; with `--real-model`,
+`Live model (openai) · sample lookups · Stripe test mode`). Press Enter through
+two prefilled answers: whether the package was opened and what was damaged.
+Pause after the automatic lookups when the screen says `Next: issue refund` and
+`The demo pauses here, before Stripe.`, then press Enter at
+`Press Enter to submit the refund`.
 
 **Say over the completed-loop frame**
 
@@ -385,12 +387,13 @@ idempotency key makes those calls resolve to one refund.
 **What does it cost to run?**
 
 The deterministic stage, with or without `--real`, makes no model calls: 0
-tokens and $0. A live-model pass makes four model calls. GPT-5.6 Luna was
-measured on 2026-09-30: 2,492 input and 353 output tokens (114 of them
-reasoning), 2,845 tokens in all, $0.0009. Claude Sonnet 4.6 has not been run;
-it is an estimated 5,400 to 6,900 input and 200 to 400 output tokens, about two
-cents. Both are priced at list prices checked on 2026-09-29. Killing the Worker
-adds no model calls, because the new Worker replays the recorded turns. The
+tokens and $0. With `--real-model`, each demo makes four model calls. GPT-5.6
+Luna was measured on 2026-10-02: about 2,950 tokens and $0.0009 per demo,
+$0.0019 per take. Claude Sonnet 4.6 has not been run; it is an estimated 5,400
+to 6,900 input and 200 to 400 output tokens per demo, about two cents. Both are
+priced at list prices checked on 2026-09-29. Starting Demo 1 over paid the four
+calls again (2,972 tokens, $0.0009, measured). Killing the Worker in Demo 2
+added no model calls, because the new Worker replays the recorded turns. The
 README's
 "Cost to run" has the full table, and [the cost methodology](COST.md) has a way
 to measure a pass.
