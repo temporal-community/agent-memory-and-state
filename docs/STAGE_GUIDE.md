@@ -76,7 +76,7 @@ uv run refund-demo cleanup
 
 Cleanup refunds only outstanding test payments created by this demo. It does
 not delete Stripe test objects or make the Dashboard's row counts match: Stripe
-retains both payment and refund records. `refunded 0 cents` means the cleanup
+retains both payment and refund records. `refunded $0.00` means the cleanup
 scan found no outstanding recognized demo payment.
 
 ## Testing a live model

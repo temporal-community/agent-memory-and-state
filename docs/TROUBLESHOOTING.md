@@ -32,4 +32,4 @@ show up in Temporal Web and in `.demo-state/stage-<token>/worker.log`.
 | A Query in Temporal Web fails or hangs during `WORKER GONE` | Queries need a live Worker | Use the History tab while the Worker is gone |
 | `Starting a new Worker. It picks up from Temporal's history...` stays up for several seconds | Temporal may first offer the new task to the killed Worker's sticky queue and wait out its timeout (10 s by default in the Python SDK). A `WorkflowTaskTimedOut` event may appear | Expected; nothing to fix |
 | `refund-demo result <id>` hangs | No Worker is polling that Workflow's task queue | For a Workflow started with `refund-demo start`, run `uv run refund-worker`. A stage Workflow uses a private `refund-stage-<token>` queue that only the stage's own Worker polls |
-| `THE SYSTEM \| cleanup done, refunded 0 cents of demo charges` | There was no outstanding demo test payment | Not an error |
+| `THE SYSTEM \| cleanup done, refunded $0.00 of demo charges` | There was no outstanding demo test payment | Not an error |
