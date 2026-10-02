@@ -123,25 +123,31 @@ the lifespan framing, and the exactly-once misconception.
 
 ## What this demo proves
 
-- The durable agent is a visible loop. On the stage path, two intake questions
-  are asked by code; a deterministic policy or a live model then chooses the
-  lookups and the decision.
-- Process-local working memory disappears when its process is killed.
-- Persisted memory can restore facts without owning the loop's progress.
-- Stripe proves that the payment is paid and no refund exists in the naive run.
-  (Offline, a fixed `PAID` label and the naive ledger stand in.)
-- Without execution state, recovery requires restarting the loop or building a
-  custom durable state machine.
-- A durable Workflow records where the work stands across Worker restarts.
-- An application that keeps or derives the Workflow ID can report running or
-  completed work instead of starting a new operation. In the stage, the runner
-  holds that Workflow handle for you.
-- Stripe remains authoritative about whether the refund exists.
-- One Workflow run identity becomes one effect idempotency key. The key is
-  `durable-refund-` plus the SHA-256 of `<workflow_id>:<run_id>`, so it stays
-  the same across retries in one run and changes for a new run.
-- Durable execution does not make effects exactly once; it lets a retry ask the
-  effect owner instead of guessing.
+**1. The agent is a plain loop.** It asks the customer two questions, looks up
+the order and refund history, and decides. On the stage path, code asks the
+two intake questions; a fixed policy or a live model picks the lookups and the
+decision.
+
+**2. Without execution state, a crash sends the customer back to the start.**
+The naive agent keeps the answers and its place in the loop in process memory,
+so when the process dies, both are gone. Stripe still correctly shows the
+payment as paid with no refund (offline, a fixed `PAID` label and the naive
+ledger stand in), but Stripe never had the answers or the next step. Saved
+memory could bring back the answers, but not where the work stands. Your
+options are to restart the loop or build your own durable state machine.
+
+**3. With Temporal, the work picks up where it stopped.** The durable agent runs
+the same loop as a Workflow, so each answer and lookup is recorded in Event
+History. A new Worker rebuilds the loop from that history and continues at
+`issue refund` without asking again. Because the app keeps the Workflow ID, it
+can report the running or finished refund instead of starting a new one; on
+the stage, the runner holds that handle for you.
+
+**4. Temporal records the attempt; Stripe owns the outcome.** Durable execution
+doesn't make the refund exactly once. Each run gets one idempotency key,
+`durable-refund-` plus the SHA-256 of `<workflow_id>:<run_id>`, so every retry
+in that run sends the same key, and Stripe returns the same refund instead of
+creating a second one.
 
 ## How it works
 
