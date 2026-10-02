@@ -245,8 +245,8 @@ def test_worker_gone_frame_shows_the_loop_read_from_temporal_just_now(
         return [
             {"kind": "answer", "question_id": "item_opened", "result": "Yes"},
             {"kind": "answer", "question_id": "damage", "result": "Split seam"},
-            {"kind": "tool", "label": "Found order", "result": "done"},
-            {"kind": "tool", "label": "Checked refund history", "result": "done"},
+            {"kind": "tool", "label": "Order", "result": "done"},
+            {"kind": "tool", "label": "Refund history", "result": "done"},
             {"kind": "ready", "label": "Next action", "result": "issue refund"},
         ]
 

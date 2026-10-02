@@ -109,8 +109,8 @@ An agent needs both, and they do different jobs.
 
 | | What it helps with | In this demo | Where to find it |
 | --- | --- | --- | --- |
-| **Context** | What the model sees for this one decision | The refund request plus everything the agent has learned so far, sent on each turn | The input of each `agent_decide_next_step` Activity in Event History |
-| **Memory** | What the agent knows or can look up, so it can reason | The customer's two answers and the lookups: order 1234 and the refund history of the demo customer, Nyghtowl | Naive agent: a dict inside its process (`naive_refund.py`). Durable agent: `working_memory` in the Workflow (`workflow.py`), rebuilt from history after a restart |
+| **Context** | What the model sees for this one decision | The refund request plus what's loaded from memory (the answers and lookups so far), sent on each turn | The input of each `agent_decide_next_step` Activity in Event History |
+| **Memory** | What the agent knows or can look up, so it can reason | The customer's two answers and the lookups: order 1234 and the refund history of the demo customer, Nyghtowl | Naive agent: a dict inside its process (`naive_refund.py`). Durable agent: `working_memory` in the Workflow (`workflow.py`), rebuilt from history after a restart. On screen, lookups are marked `(memory)` |
 | **Execution state** | Where the work stands: which steps finished and what runs next, so the work can continue after a crash without redoing it | 2 answers, 2 lookups, next action `issue refund` | Temporal: the Workflow's Event History in the Temporal UI (http://localhost:8233), or `uv run refund-demo inspect <workflow-id>` |
 | **Effect state** | Whether the side effect really happened | Whether Stripe holds a refund for the payment | Stripe: the Dashboard in test mode, where the refund carries `temporal_workflow_id` (offline: the ledger) |
 

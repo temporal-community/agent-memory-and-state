@@ -607,7 +607,7 @@ def _loop_steps_from_progress(progress: dict) -> list[dict[str, str]]:
                 {
                     "kind": "tool",
                     "tool": tool,
-                    "label": "Found order",
+                    "label": "Order",
                     "result": str(result.get("item") or "python plushy"),
                 }
             )
@@ -616,7 +616,7 @@ def _loop_steps_from_progress(progress: dict) -> list[dict[str, str]]:
                 {
                     "kind": "tool",
                     "tool": tool,
-                    "label": "Checked refund history",
+                    "label": "Refund history",
                     "result": "clean",
                 }
             )
@@ -625,7 +625,7 @@ def _loop_steps_from_progress(progress: dict) -> list[dict[str, str]]:
                 {
                     "kind": "tool",
                     "tool": tool,
-                    "label": "Checked refund policy",
+                    "label": "Refund policy",
                     "result": "eligible"
                     if result.get("eligible_for_refund")
                     else "not eligible",
