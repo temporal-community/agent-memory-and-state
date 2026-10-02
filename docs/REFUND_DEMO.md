@@ -11,11 +11,11 @@ development, rehearsal, debugging, or a longer technical walkthrough.
 
 The guided stage makes an agent loop visible. The durable agent asks two intake
 questions, observes the answers, chooses its lookups, and decides `issue
-refund`. The naive side runs the same steps as a scripted process, and that
-position exists only in its process. On the durable side, answers are Signals,
-lookups are Activities, and the next action is Workflow state. A replacement
-Worker rebuilds the loop from Event History and resumes without repeating
-questions.
+refund`. The naive side runs the same loop and decision step in a plain
+process, with no Temporal, and that position exists only in its process. On the
+durable side, answers are Signals, lookups are Activities, and the next action
+is Workflow state. A replacement Worker rebuilds the loop from Event History and
+resumes without repeating questions.
 
 ## Setup
 
@@ -78,12 +78,21 @@ Test live model behavior without Stripe first:
 uv run refund-demo stage --real-model --model-provider anthropic
 ```
 
+Both demos then run on the live model: Demo 1's agent process calls the same
+decision step directly, and both headers read
+`Live model (anthropic) · sample lookups · offline ledger (no Stripe)`. While
+Demo 1 waits on the model, the screen shows
+`The agent is choosing its next step...`. The model sees the amount as
+`"$80.00"`, never cents; the stored request and working memory keep
+`amount_cents`.
+
 The stage fixture always represents order 1234, an $80 python plushy that is
 explicitly eligible for a refund without a physical return. A request for a
-different item can correctly be denied by a live model. On denial, the stage
-shows the model's rationale and confirms that no refund was issued. If `--real`
-created a Stripe test payment before that denial, run
-`uv run refund-demo cleanup` to reconcile the test charge.
+different item can correctly be denied by a live model. A denial in Demo 1
+stops the stage before Demo 2, with a message. A denial in Demo 2 shows the
+model's rationale and confirms that no refund was issued. If `--real` created a
+Stripe test payment before that denial, run `uv run refund-demo cleanup` to
+reconcile the test charge.
 
 ## Start Temporal and the Worker
 
@@ -145,8 +154,9 @@ Temporal is the implementation shown on the durable side.
 
 Use `reset` to start over and `quit` to exit.
 
-For the same scripted autonomous loop and pre-effect pause used by the stage
-runner:
+For the same autonomous loop and pre-effect pause used by the stage runner
+(add `--real-model --model-provider openai` or `anthropic` for the live
+model):
 
 ```bash
 uv run naive-refund reset
@@ -154,8 +164,11 @@ uv run naive-refund refund --order 1234 --interactive-loop --hold-before-effect
 ```
 
 The command asks its questions on stdin, emits each `AGENT STEP`, then waits
-after choosing the refund. No refund is written to the ledger. The older
-post-effect boundary is still available for technical comparison:
+after choosing the refund. No refund is written to the ledger. If the model
+denies, it prints `no refund issued for order 1234` and exits instead of
+waiting. `--real-model` with no `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` stops
+with an `AGENT ERROR` line rather than falling back to the fixed policy. The
+older post-effect boundary is still available for technical comparison:
 
 ```bash
 uv run naive-refund refund --order 1234 --exit-after-effect
@@ -416,7 +429,10 @@ temporal workflow describe --workflow-id demo-restart
 
 Useful events include:
 
-- model and tool Activities from the bounded loop
+- model and tool Activities from the bounded loop, each with a plain-words
+  summary: `Agent turn N: decide the next step`, `Look up order 1234`,
+  `Look up the customer's refund history`, `Check the refund policy`, and
+  `Issue the refund in Stripe` (also offline, where the ledger stands in)
 - `WorkflowExecutionSignaled` when a human approves, or when the stage sends a
   customer answer
 - `issue_refund` attempt 2 after Worker recovery

@@ -12,8 +12,11 @@ you run.
 
 For Demo 1, it launches a naive agent subprocess
 ([`naive_refund.py`](../src/refund_agent/naive_refund.py)) and talks to it over
-stdin and stdout. The subprocess runs scripted steps and keeps the customer's
-answers in a local dictionary. After it is killed, a new subprocess only reads
+stdin and stdout. The subprocess runs the same loop as Demo 2, in process: each
+turn calls `decide_next_step`, the function behind the `agent_decide_next_step`
+Activity, so it uses the fixed policy by default and the live model with
+`--real-model`. It keeps the customer's answers and observations in local
+lists. After it is killed, a new subprocess only reads
 the effect owner. Offline, that is its own `naive-ledger.json`; with `--real`,
 it retrieves the PaymentIntent and its refund list from Stripe test mode.
 
@@ -32,8 +35,10 @@ a private task queue, `refund-stage-<token>`. It runs the Workflow loop
   OpenAI with `--real-model`. Each call carries the summary
   `Agent turn N: decide the next step`, shown in Event History
 - three fixture lookups: `lookup_order`, `lookup_customer_history`, and
-  `check_refund_policy`
-- `issue_refund`, which writes one refund keyed by
+  `check_refund_policy`, with the summaries `Look up order 1234`,
+  `Look up the customer's refund history`, and `Check the refund policy`
+- `issue_refund`, summary `Issue the refund in Stripe`, which writes one
+  refund keyed by
   `durable-refund-<sha256 of workflow_id:run_id>`. Offline, it writes to
   `effect-ledger.json`, a different file from the naive ledger; with `--real`,
   it calls Stripe test mode.
@@ -114,14 +119,14 @@ deterministic policy, chooses the lookups and the decision. The loop is
 bounded, Workflow state replays deterministically, and every external call runs
 as an Activity.
 
-The change from a plain in-process loop is small. This repo's naive process is
-scripted, so the left column is a generic loop, not code from this repo:
+The change from a plain in-process loop is small. Demo 1's naive process
+(`_run_interactive_agent_loop` in `naive_refund.py`) is the left column:
 
 | Plain in-process loop | Temporal Workflow loop |
 | --- | --- |
-| `step = agent_decide_next_step(request, memory)` | `step = await workflow.execute_activity(agent_decide_next_step, args=[request, self.working_memory], ...)` |
-| `answer = input(question)` | A `customer_answer` Signal, then `await workflow.wait_condition(...)` |
-| `memory.append(result)`, held in RAM | `self.working_memory.append(result)`, rebuilt by replay after a restart |
+| `step = decide_next_step(request, working_memory)` | `step = await workflow.execute_activity(agent_decide_next_step, args=[request, self.working_memory], ...)` |
+| `answer = sys.stdin.readline()` | A `customer_answer` Signal, then `await workflow.wait_condition(...)` |
+| `working_memory.append(result)`, held in RAM | `self.working_memory.append(result)`, rebuilt by replay after a restart |
 
 ## Useful commands
 

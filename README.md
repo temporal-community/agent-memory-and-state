@@ -25,9 +25,10 @@ the two stays visible.
   the work stands; Stripe, not Temporal, says whether money moved.
 - [Gotchas](#when-event-history-grows-claim-check-and-continue-as-new): Event
   History grows every turn; a claim check and continue-as-new keep it in bounds.
-- [Cost to run](#cost-to-run): a measured GPT-5.6 Luna pass used 4 model calls,
-  2,845 tokens, $0.0009. Starting over pays about that again (estimated);
-  replay added 0 calls (measured).
+- [Cost to run](#cost-to-run): on GPT-5.6 Luna, a measured pass used 4 model
+  calls, about 2,950 tokens, $0.0009. Starting over after the kill paid it
+  again (4 calls, 2,972 tokens, $0.0009, measured in Demo 1); Temporal's replay
+  made 0 calls (measured in Demo 2).
 - [Run the guided demo](#run-the-guided-demo): one command after setup; the
   default run needs no keys.
 - [Takeaways](#takeaways): the three lines the demo ends on.
@@ -45,29 +46,36 @@ resumes at `issue refund` without repeating a question.
 
 ![The durable demo's stage screen right after its Temporal Worker was killed. The left pane, Temporal Worker, reads WORKER GONE: its in-memory loop is gone, and Temporal still has the saved loop. The right pane, What Survives, shows what was read from Temporal just now: customer answers 2, completed lookups 2, next action issue refund. Below it, the offline ledger (Stripe stand-in) shows payment PAID and refund none.](assets/durable-saved.png)
 
-**Last verified: 2026-10-01.** One offline `uv run refund-demo stage` run, in
-which the Worker was killed at `issue refund` and the new Worker completed the
-refund in the offline ledger; one `--real` run, in which the new Worker's refund
-returned `succeeded` from Stripe test mode; one offline run each of
-`--simulate-stripe-retry` and `--simulate-stripe-timeout`; and the offline tests
-and lint. Not re-run on this date: the live-model pass, last measured on
-2026-09-30 on GPT-5.6 Luna (offline ledger, 4 model calls, 2,845 tokens,
-$0.0009). The Claude path has not been run.
+**Last verified: 2026-10-02.** One offline `uv run refund-demo stage` run, in
+which the new Worker completed the refund in the offline ledger, and one
+`stage --real --real-model --model-provider openai` run on GPT-5.6 Luna, in
+which both demos ran on the live model and the new Worker's refund returned
+`succeeded` from Stripe test mode. In both, Demo 1's process was killed at
+`issue refund` and the customer was told to start over, and Demo 2 resumed at
+`issue refund` without repeating a question. Demo 1's live loop was also run
+once more to the same point to measure a start-over. The offline tests and lint
+passed. Not re-run on this date: `--real` without `--real-model`,
+`--simulate-stripe-retry`, and `--simulate-stripe-timeout`, last verified on
+2026-10-01. The Claude path has not been run.
 
 **What is real and what is staged:**
 
-- By default, the durable agent uses a deterministic refund policy, the naive
-  agent is a scripted process, "Stripe" is an offline ledger, and Temporal is a
-  local dev server. A default run makes no model calls: 0 tokens, $0.
+- By default, both agents use the same deterministic refund policy (the naive
+  agent runs it in its own process, with no Temporal), "Stripe" is an offline
+  ledger, and Temporal is a local dev server. A default run makes no model
+  calls: 0 tokens, $0.
 - `--real` switches to Stripe test mode. `--real-model` lets Claude or OpenAI
-  choose the lookups and the refund decision.
+  choose the lookups and the refund decision in both demos, through the same
+  model step.
 - The stage runner keeps its own copy of your Demo 1 answers for display and
   never gives it to the new agent process. It replays those answers into the
   durable run as Signals, so Demo 2 doesn't ask you to type them again, and the
   screen says so: "Reusing your Demo 1 answers so you don't type them twice..."
 - Each demo's header has a dim line that names what is scripted, such as
   `Scripted steps · offline ledger (no Stripe)` or
-  `Fixed policy (no LLM) · sample lookups · Stripe test mode`.
+  `Fixed policy (no LLM) · sample lookups · Stripe test mode`. With
+  `--real-model`, both headers read `Live model (openai) · sample lookups · …`
+  (or `anthropic`).
 - On the default path, the durable Workflow waits on a stage-only `release`
   Signal just before the refund, so the Worker kill lands at the same point in
   every take.
@@ -83,7 +91,7 @@ $0.0009). The Claude path has not been run.
 | Moment | Naive agent | Durable agent |
 | --- | --- | --- |
 | **Before the request** | The customer's python plushy order shows as paid | The same paid order |
-| **Agent loop** | A scripted process asks two questions, performs two lookups, and chooses `issue refund` | The same steps in a Temporal Workflow: answers are Signals, lookups are Activities |
+| **Agent loop** | A plain in-process loop asks two questions, runs the lookups the policy or model picks, and chooses `issue refund` | The same loop and decision step in a Temporal Workflow: answers are Signals, lookups are Activities |
 | **Process killed** | The naive agent process takes the answers and loop position with it; Stripe still says paid with no refund | The Worker is killed; completed observations and the next action remain in Event History |
 | **Agent reloads** | A new agent process correctly checks Stripe, but the customer starts over | A new Worker rebuilds the loop from Event History; **no repeated questions** |
 | **Outcome** | The customer must repeat the intake | The loop resumes at `issue refund` |
@@ -112,7 +120,7 @@ An agent needs both, and they do different jobs.
 | --- | --- | --- | --- |
 | **Context** | What the model sees for this one decision | The refund request plus what's loaded from memory (the answers and lookups so far), sent on each turn | The input of each `agent_decide_next_step` Activity in Event History |
 | **Memory** | What the agent knows or can look up, so it can reason | The customer's two answers and the lookups: order 1234 and the refund history of the demo customer, Nyghtowl | Naive agent: a dict inside its process (`naive_refund.py`). Durable agent: `working_memory` in the Workflow (`workflow.py`), rebuilt from history after a restart. On screen, lookups are marked `(memory)` |
-| **Execution state** | Where the work stands: which steps finished and what runs next, so the work can continue after a crash without redoing it | 2 answers, 2 lookups, next action `issue refund` | Temporal: the Workflow's Event History in the Temporal UI (http://localhost:8233), or `uv run refund-demo inspect <workflow-id>` |
+| **Execution state** | Where the work stands: which steps finished and what runs next, so the work can continue after a crash without redoing it | 2 answers, 2 lookups (3 when a live model also checks the refund policy), next action `issue refund` | Temporal: the Workflow's Event History in the Temporal UI (http://localhost:8233), or `uv run refund-demo inspect <workflow-id>` |
 | **Effect state** | Whether the side effect really happened | Whether Stripe holds a refund for the payment | Stripe: the Dashboard in test mode, where the refund carries `temporal_workflow_id` (offline: the ledger) |
 
 **Temporal's role.** Temporal keeps the execution state outside the agent's
@@ -120,9 +128,11 @@ process. Each finished step is recorded in Event History as it happens: an
 answer arrives as a `customer_answer` Signal, and a model turn or a lookup
 finishes as an Activity. When the Worker dies, a new Worker replays that
 history, rebuilds the loop and `working_memory`, and continues at the next
-unfinished step without calling the finished ones again. Temporal doesn't
-decide what the agent does, doesn't make the model's answer right, and doesn't
-make the refund exactly once; the Stripe idempotency key does that.
+unfinished step without calling the finished ones again. Replay, not redo. In
+the video: "It's not redoing any of those steps it's already done. It's
+replaying them." Temporal doesn't decide what the agent does, doesn't make the
+model's answer right, and doesn't make the refund exactly once; the Stripe
+idempotency key does that.
 
 **Memory alone isn't enough.** A memory store could bring back the answers, but
 not where the work stands: whether `issue refund` is next, already running, or
@@ -171,10 +181,10 @@ creating a second one.
 ```mermaid
 flowchart LR
     accTitle: How the guided stage demo is wired
-    accDescr: The refund-demo stage command drives both demos. Demo 1 is a scripted naive agent process that keeps its answers in memory, and after it is killed a new process only reads the effect owner. Demo 2 starts a Temporal Workflow on a local dev server. A separate Worker process polls a private task queue on that server and runs the Workflow loop and its Activities. The stage kills that Worker and starts a replacement, which replays Event History to rebuild the loop and then issues one refund to the offline effect ledger, or to Stripe test mode with --real.
+    accDescr: The refund-demo stage command drives both demos. Demo 1 is a naive agent process that runs the same decision step with no Temporal and keeps its answers in memory, and after it is killed a new process only reads the effect owner. Demo 2 starts a Temporal Workflow on a local dev server. A separate Worker process polls a private task queue on that server and runs the Workflow loop and its Activities. The stage kills that Worker and starts a replacement, which replays Event History to rebuild the loop and then issues one refund to the offline effect ledger, or to Stripe test mode with --real.
     stage["refund-demo stage<br/>stage.py"]
     subgraph demo1["Demo 1: naive agent process"]
-        naive["naive_refund.py<br/>scripted steps<br/>answers in a local dict"]
+        naive["naive_refund.py<br/>same decision step, no Temporal<br/>answers in a local dict"]
     end
     subgraph server["Temporal dev server: gRPC 7233, Web UI 8233"]
         queue["Private task queue<br/>refund-stage-token"]
@@ -200,8 +210,9 @@ flowchart LR
 ```
 
 `uv run refund-demo stage` ([`stage.py`](src/refund_agent/stage.py)) drives a
-scripted naive subprocess ([`naive_refund.py`](src/refund_agent/naive_refund.py))
-for Demo 1 and the `RefundApprovalAgent` Workflow for Demo 2. A separate Worker
+naive subprocess ([`naive_refund.py`](src/refund_agent/naive_refund.py)), which
+runs the same decision step with no Temporal, for Demo 1 and the
+`RefundApprovalAgent` Workflow for Demo 2. A separate Worker
 ([`worker.py`](src/refund_agent/worker.py)) polls a private
 `refund-stage-<token>` task queue and runs the loop
 ([`workflow.py`](src/refund_agent/workflow.py)) and its Activities. The stage
@@ -300,7 +311,7 @@ The Makefile wraps the same commands. `make` alone lists the targets, and
 | Rehearse safely with deterministic responses and an offline ledger | `uv run refund-demo stage` | 0 tokens, $0 |
 | Run the same story against Stripe test mode | `uv run refund-demo stage --real` | 0 tokens, $0 |
 | Show a real Activity retry after a simulated Stripe timeout | `uv run refund-demo stage --real --simulate-stripe-timeout` | 0 tokens, $0 |
-| Let a live model choose the lookups and the decision | `uv run refund-demo stage --real-model --model-provider anthropic` (or `openai`) | GPT-5.6 Luna, measured 2026-09-30: 4 calls, 2,845 tokens (reasoning included), $0.0009. Claude Sonnet 4.6, estimated (not run): about 4 calls, 5,600-7,300 tokens, about $0.02-$0.03. See [Cost to run](#cost-to-run) |
+| Let a live model choose the lookups and the decision in both demos | `uv run refund-demo stage --real-model --model-provider anthropic` (or `openai`) | GPT-5.6 Luna, measured 2026-10-02: 8 calls (4 per demo), 5,908 tokens (reasoning included), $0.0019. Claude Sonnet 4.6, estimated (not run): about 8 calls, 11,200-14,600 tokens, about $0.04-$0.05. See [Cost to run](#cost-to-run) |
 
 A live model needs `ANTHROPIC_API_KEY` and `ANTHROPIC_MODEL`, or
 `OPENAI_API_KEY` and `OPENAI_MODEL`; set `OPENAI_MODEL=gpt-5.6-luna` to match
@@ -358,11 +369,12 @@ refund request reached Stripe. I lost your return answers. Please start the
 return again."
 
 The durable Worker is killed at the same next action. With no Worker running,
-Temporal still has both answers, both lookups, and
+Temporal still has both answers, the completed lookups, and
 `Next action: issue refund`, and the stage reads them back from Event History
 on the `WORKER GONE` frame ([shown at the top](#agent-memory-and-state)). The
 new Worker finishes with `NO REPEATED QUESTIONS`, `NO LOOP RESTART`, and "Your
-refund is complete."
+refund is complete." As the video puts it: "The customer didn't have to go back
+through the whole flow again."
 
 In the video: "Memory helps reasoning continue. Temporal helps the operation
 continue."
@@ -405,41 +417,47 @@ Demo 2: With Temporal, the agent keeps its place
 ```
 
 The [expected output](docs/EXPECTED_OUTPUT.md) has the full transcript, the
-pane text when the history read fails, and the Worker log showing the resume.
+pane text when the history read fails, what changes with a live model, and the
+Worker log showing the resume.
 
 ## Cost to run
 
-A live-model pass on GPT-5.6 Luna, measured on 2026-09-30, made 4 model calls:
-2,492 input and 353 output tokens (114 of them reasoning), 2,845 tokens in all,
-$0.0009 at the 2026-09-29 list prices. Claude Sonnet 4.6 has not been run; it
-is an estimated 4 model calls, about 5,400-6,900 input and 200-400 output
-tokens, about $0.02-$0.03.
+With `--real-model`, both demos call the model through the same step. One
+`stage --real --real-model --model-provider openai` take on GPT-5.6 Luna,
+measured on 2026-10-02, made 8 model calls, 4 in each demo: 5,230 input and
+678 output tokens, 5,908 tokens in all, $0.0019 at the 2026-09-29 list prices.
+Claude Sonnet 4.6 has not been run; it is an estimated 4 model calls per demo,
+about 5,400-6,900 input and 200-400 output tokens each, about $0.02-$0.03 per
+demo.
 
-Starting the loop over from scratch after the kill pays about the same again:
-about 4 calls and 2,845 tokens, $0.0009, on Luna. That is an estimate, because
-Demo 1's scripted agent calls no model. In the measured pass, Temporal replay
-made 0 extra model calls: the new Worker read the recorded model turns from
-Event History. A model call still running when a Worker dies is different: it
-runs again after its 60-second Activity timeout and can be billed again. On
-the stage path the kill lands after the last model call, so no call is in
-flight.
+**Starting over pays again; replay doesn't.** Running Demo 1's loop to the
+same point a second time, as the customer must after the kill, made 4 more
+model calls: 2,972 tokens, $0.0009, measured. In Demo 2, the new Worker read
+the 4 recorded model turns from Event History and made 0 model calls,
+measured. A model call still running when a Worker dies is different: it runs
+again after its 60-second Activity timeout and can be billed again. On the
+stage path the kill lands after the last model call, so no call is in flight.
 
 The offline rehearsal (`uv run refund-demo stage`) and the `--real` run use a
-fixed policy: 0 model calls, 0 tokens, $0.
+fixed policy in both demos: 0 model calls, 0 tokens, $0.
 
-| Run | Model and settings | Model calls per pass | Tokens per pass | Dollars per pass | Basis |
+| Run | Model and settings | Model calls | Tokens | Dollars | Basis |
 | --- | --- | --- | --- | --- | --- |
-| `uv run refund-demo stage --real-model --model-provider openai` | `gpt-5.6-luna`, Responses API, reasoning effort left at the model default, no output cap | 4 (all before the kill; the kill + replay added 0) | 2,845: 2,492 input (0 cached) + 353 output (239 visible + 114 reasoning, billed as output) | $0.0009 | **Measured**, 2026-09-30, one pass with `LOG_MODEL_USAGE=1`, summed by `refund-demo usage` |
-| `uv run refund-demo stage --real-model --model-provider anthropic` | `claude-sonnet-4-6`, `max_tokens=512`, forced tool choice, no extended thinking, no prompt caching | about 4 (the 2 intake questions don't call the model) | about 5,400-6,900 input + 200-400 output | about $0.02-$0.03 | **Estimated**, 2026-09-29. Not run: no Claude pass has been logged |
-| Start over from scratch after the kill, instead of replaying | Same model and settings as the pass | about 4 more | about 2,845 more on Luna; about 5,600-7,300 more on Claude | about $0.0009 more on Luna; about $0.02-$0.03 more on Claude | **Estimated**: the measured pass repeated. Not measured, because Demo 1 calls no model |
-| Worst case, stage with Claude | 8 model turns x 5 Temporal attempts; assumes about 2,000 input tokens per call (default request text) and every call billed at the 512-token cap | 40 | about 80,000 input + 20,480 output | about $0.55 | Modeled from the code. Not a hard ceiling: your request text is resent on every call |
-| Worst case, manual `refund-demo start` with Claude | 10 model turns x 5 attempts (no code-driven intake turns); same assumptions | 50 | about 100,000 input + 25,600 output | about $0.68 | Modeled from the code, same caveat |
-| Worst case, stage with GPT-5.6 Luna | 8 turns x 5 attempts; assumes about 2,000 input and about 2,100 output plus reasoning tokens per call | 40 | about 80,000 input + 84,000 output | about $0.12 | Modeled. No fixed ceiling: the code sets no output cap |
-| `uv run refund-demo stage` | None: deterministic policy, offline ledger, local dev server | 0 | 0 | $0.00 | From the code path |
-| `uv run refund-demo stage --real` | None: deterministic policy, Stripe test mode | 0 | 0 | $0.00 (Stripe test mode moves no money) | From the code path |
+| Demo 1 pass: `uv run refund-demo stage --real-model --model-provider openai` | `gpt-5.6-luna`, Responses API, reasoning effort left at the model default, no output cap | 4 | 2,962: 2,619 input (0 cached) + 343 output (87 of them reasoning, billed as output) | $0.0009 | **Measured**, 2026-10-02, one take with `LOG_MODEL_USAGE=1`, summed by `refund-demo usage` |
+| Demo 1 start-over: the same loop run again to the same point, with the same answers | Same | 4 more | 2,972: 2,623 input + 349 output (97 reasoning) | $0.0009 more | **Measured**, 2026-10-02: the naive agent's live loop run once more outside the stage |
+| Demo 2 pass, same take | Same | 4, all before the kill | 2,946: 2,611 input + 335 output (84 reasoning) | $0.0009 | **Measured**, 2026-10-02 |
+| Demo 2 replay after the kill | Same | 0 | 0 | $0.00 | **Measured**, 2026-10-02: no usage record after the kill, and each agent turn appears once in Event History |
+| Each demo, `uv run refund-demo stage --real-model --model-provider anthropic` | `claude-sonnet-4-6`, `max_tokens=512`, forced tool choice, no extended thinking, no prompt caching | about 4 per demo (the 2 intake questions don't call the model) | about 5,400-6,900 input + 200-400 output per demo | about $0.02-$0.03 per demo, $0.04-$0.05 per take | **Estimated**, 2026-09-29. Not run: no Claude pass has been logged |
+| Demo 1 start-over on Claude | Same | about 4 more | about 5,600-7,300 more | about $0.02-$0.03 more | **Estimated**: one Claude demo pass repeated |
+| Worst case, stage with Claude | Demo 2: 8 model turns x 5 Temporal attempts. Demo 1: 8 turns, 1 attempt each (no retry layer). Assumes about 2,000 input tokens per call (default request text) and every call billed at the 512-token cap | 48 | about 96,000 input + 24,576 output | about $0.66 | Modeled from the code. Not a hard ceiling: your request text is resent on every call |
+| Worst case, manual `refund-demo start` with Claude | 10 model turns x 5 attempts (no code-driven intake turns, no Demo 1); same assumptions | 50 | about 100,000 input + 25,600 output | about $0.68 | Modeled from the code, same caveat |
+| Worst case, stage with GPT-5.6 Luna | The same 48 calls; assumes about 2,000 input and about 2,100 output plus reasoning tokens per call | 48 | about 96,000 input + 100,800 output | about $0.14 | Modeled. No fixed ceiling: the code sets no output cap |
+| `uv run refund-demo stage` | None: deterministic policy in both demos, offline ledger, local dev server | 0 | 0 | $0.00 | From the code path |
+| `uv run refund-demo stage --real` | None: deterministic policy in both demos, Stripe test mode | 0 | 0 | $0.00 (Stripe test mode moves no money) | From the code path |
 
 List prices as of 2026-09-29, per million tokens: Claude Sonnet 4.6 $3 input
-and $15 output; GPT-5.6 Luna $0.20 input and $1.20 output. Stripe test mode and
+and $15 output; GPT-5.6 Luna $0.20 input ($0.02 cached) and $1.20 output.
+Stripe test mode and
 the local dev server cost $0; on Temporal Cloud a pass is an estimated 20-165
 Actions, under one cent. Retries (up to 5 attempts per model turn), more turns,
 a longer request resent on every call, and reasoning tokens raise the cost.
@@ -525,11 +543,14 @@ Temporal.
 - **Not a production refund service.** No authentication, production database,
   web application, multi-agent orchestration, or operational hardening.
 - **Not LLM-driven by default.** Without `--real-model`, a deterministic policy
-  decides. With it, code still asks the two intake questions, the model chooses
-  the lookups and the decision, and the stage approves if the model escalates.
-- **The naive side is not a model or a Temporal Worker.** It is a scripted
-  process with hard-coded questions and lookups: the same steps as the durable
-  half, not the same code. The screens call it the agent process
+  decides. With it, in both demos, code still asks the two intake questions,
+  the model chooses the lookups and the decision, and the stage approves if the
+  model escalates.
+- **The naive side is not a Temporal Worker.** It is a plain process that runs
+  the same decision step (`decide_next_step`) and fixture lookups as the durable
+  half, with no Temporal: the fixed policy by default, the live model with
+  `--real-model`. With no retry layer, a failed model call ends Demo 1. The
+  screens call it the agent process
   (`PROCESS GONE`, `NEW AGENT PROCESS`) and keep "Worker" for the Temporal
   side (`WORKER GONE`, `NEW TEMPORAL WORKER`).
 - **The lookups return fixtures.** `lookup_order`, `lookup_customer_history`,
@@ -548,8 +569,8 @@ Temporal.
   agent process's status check reads Stripe directly, and only with `--real`;
   offline, it reads its own naive ledger. In the default mode the pane heading
   says `OFFLINE LEDGER (Stripe stand-in)` (with `--real`, `STRIPE (test mode)`),
-  but the agent's lines and the Worker log still say "Stripe" as the story's
-  name for the effect owner.
+  but the agent's lines, the Worker log, and the `issue_refund` summary in
+  Event History still say "Stripe" as the story's name for the effect owner.
 - **Not a memory system.** Temporal holds execution state, not the agent's
   memory, and [Event History is bounded](#when-event-history-grows-claim-check-and-continue-as-new).
   The demo doesn't prescribe how agent memory should be stored or managed;

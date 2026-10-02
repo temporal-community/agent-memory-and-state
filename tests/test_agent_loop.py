@@ -22,7 +22,15 @@ from refund_agent.activities import (
     lookup_customer_history,
     lookup_order,
 )
-from refund_agent.models import AgentStep, RefundDecision, RefundRequest, RefundResult
+from refund_agent.models import (
+    AgentStep,
+    CustomerHistory,
+    OrderDetails,
+    RefundDecision,
+    RefundRequest,
+    RefundResult,
+    ReturnStatus,
+)
 from refund_agent.workflow import RefundWorkflow, refund_activity_timeouts
 
 
@@ -299,12 +307,127 @@ def test_model_clients_leave_every_retry_to_temporal(monkeypatch) -> None:
         assert 0 < kwargs["timeout"] < 60
 
 
+class _RecordingResponses:
+    def __init__(self, sent: list[dict]) -> None:
+        self._sent = sent
+
+    def create(self, **kwargs):
+        self._sent.append(kwargs)
+        return _FakeResponse([_FakeCall("lookup_order", '{"order_id": "o1"}')])
+
+
+class _RecordingMessages:
+    def __init__(self, sent: list[dict]) -> None:
+        self._sent = sent
+
+    def create(self, **kwargs):
+        self._sent.append(kwargs)
+        return _FakeAnthropicResponse(
+            [_FakeAnthropicBlock("lookup_order", {"order_id": "o1"})]
+        )
+
+
+def test_model_prompts_show_money_as_dollars_not_cents(monkeypatch) -> None:
+    from refund_agent import activities
+
+    monkeypatch.delenv("LOG_MODEL_USAGE", raising=False)
+    monkeypatch.setenv("OPENAI_MODEL", "test-model")
+    monkeypatch.setenv("ANTHROPIC_MODEL", "test-claude")
+    sent: list[dict] = []
+    monkeypatch.setattr(
+        activities,
+        "OpenAI",
+        lambda **_kw: SimpleNamespace(responses=_RecordingResponses(sent)),
+    )
+    monkeypatch.setattr(
+        activities,
+        "Anthropic",
+        lambda **_kw: SimpleNamespace(messages=_RecordingMessages(sent)),
+    )
+    request = _request(8000)
+    working_memory = [
+        {"tool": TOOL_ORDER, "result": asdict(lookup_order(request.order_id))}
+    ]
+
+    activities._openai_step(request, working_memory, "key")
+    activities._anthropic_step(request, working_memory, "key")
+
+    openai_prompt = sent[0]["input"]
+    anthropic_prompt = sent[1]["messages"][0]["content"]
+    for prompt in (openai_prompt, anthropic_prompt):
+        payload = json.loads(prompt)
+        # The request and the lookup_order observation both show dollars.
+        assert payload["request"]["amount"] == "$80.00"
+        assert payload["observations"][0]["result"]["amount"] == "$80.00"
+        assert "amount_cents" not in prompt
+        assert "8000" not in prompt
+    # The stored data keeps cents.
+    assert request.amount_cents == 8000
+    assert working_memory[0]["result"]["amount_cents"] == 8000
+
+
+def test_intake_questions_stay_code_driven_on_the_live_model(monkeypatch) -> None:
+    from refund_agent import activities
+
+    def no_model(**_kwargs):
+        raise AssertionError("an intake question must not call the model")
+
+    monkeypatch.setenv("OPENAI_API_KEY", "key")
+    monkeypatch.setattr(activities, "OpenAI", no_model)
+    request = replace(
+        _request(8000), interactive_questions=True, model_provider="openai"
+    )
+
+    step = activities.decide_next_step(request, [])
+
+    assert (step.action, step.question_id) == ("ask_customer", "item_opened")
+
+
+def test_the_activity_keeps_its_name_and_runs_the_shared_decision(
+    tmp_path, monkeypatch
+) -> None:
+    from temporalio.testing import ActivityEnvironment
+
+    from refund_agent import activities
+
+    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
+    request = replace(_request(8000), use_canned_agent=True)
+    working_memory = [
+        {"tool": TOOL_ORDER, "result": asdict(lookup_order(request.order_id))},
+        {
+            "tool": TOOL_HISTORY,
+            "result": asdict(lookup_customer_history(request.customer_id)),
+        },
+    ]
+    shared: list[tuple] = []
+    original = activities.decide_next_step
+
+    def recording_decide(*args, **kwargs):
+        shared.append(args)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(activities, "decide_next_step", recording_decide)
+
+    step = ActivityEnvironment().run(
+        activities.agent_decide_next_step, request, working_memory
+    )
+
+    definition = activity._Definition.must_from_callable(
+        activities.agent_decide_next_step
+    )
+    assert definition.name == "agent_decide_next_step"
+    assert shared == [(request, working_memory)]
+    assert step == _canned_step(request, working_memory)
+    assert step.recommendation == "approve"
+
+
 # ---------------------------------------------------------------------------
 # COST: opt-in token usage log and its summary.
 # ---------------------------------------------------------------------------
 
 _USAGE_KEYS = {
     "timestamp",
+    "agent",
     "provider",
     "model",
     "input_tokens",
@@ -344,6 +467,7 @@ def test_openai_usage_is_logged_as_counts_only(tmp_path, monkeypatch) -> None:
     log = tmp_path / "model-usage.jsonl"
     (record,) = _usage_records(log)
     assert set(record) == _USAGE_KEYS
+    assert record["agent"] == "temporal"
     assert record["provider"] == "openai"
     assert record["model"] == "test-model"
     assert record["input_tokens"] == 1200
@@ -525,6 +649,43 @@ def test_usage_command_prints_tokens_and_dollars(tmp_path, capsys) -> None:
     # 1,200 input tokens x $1 + 360 output tokens x $10, per 1M tokens.
     assert "$0.004800" in overridden
     assert "your --input-price/--output-price" in overridden
+
+
+def test_usage_command_reports_demo_one_and_demo_two_apart(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    from refund_agent import activities
+    from refund_agent.cli import _parser, _usage
+
+    monkeypatch.setenv("LOG_MODEL_USAGE", "1")
+    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("OPENAI_MODEL", "gpt-5.6-luna")
+
+    def client_with(input_tokens: int):
+        usage = SimpleNamespace(input_tokens=input_tokens, output_tokens=100)
+        return lambda **_kw: _FakeClient(
+            [_FakeCall("lookup_order", '{"order_id": "o1"}')], usage
+        )
+
+    # Demo 1's naive process tags its calls; the Activity path keeps the default.
+    monkeypatch.setattr(activities, "OpenAI", client_with(1000))
+    activities._openai_step(_request(8000), [], "key", agent="naive")
+    activities._openai_step(_request(8000), [], "key", agent="naive")
+    monkeypatch.setattr(activities, "OpenAI", client_with(3000))
+    activities._openai_step(_request(8000), [], "key")
+
+    records = _usage_records(tmp_path / "model-usage.jsonl")
+    assert [record["agent"] for record in records] == ["naive", "naive", "temporal"]
+
+    _usage(_parser().parse_args(["usage", "--state-dir", str(tmp_path)]))
+    listed = capsys.readouterr().out
+    demo_one, demo_two = listed.split("Demo 2: Temporal Workflow")
+
+    assert "Demo 1: naive agent process (no Temporal)" in demo_one
+    assert "model calls             2" in demo_one
+    assert "uncached input      2,000 tokens" in demo_one
+    assert "model calls             1" in demo_two
+    assert "uncached input      3,000 tokens" in demo_two
 
 
 # ---------------------------------------------------------------------------
@@ -727,7 +888,24 @@ async def _check_refund_phases(temporal: str) -> None:
 
     @activity.defn(name="agent_decide_next_step")
     async def decide(request: RefundRequest, working_memory: list[dict]) -> AgentStep:
+        if request.customer_id == "uses-every-tool":
+            done = {observation["tool"] for observation in working_memory}
+            for tool in (TOOL_ORDER, TOOL_HISTORY, TOOL_POLICY):
+                if tool not in done:
+                    return AgentStep(action="use_tool", tool=tool)
         return AgentStep(action="decide", recommendation="approve", rationale="")
+
+    @activity.defn(name="lookup_order")
+    async def order(order_id: str) -> OrderDetails:
+        return OrderDetails(order_id, "python plushy", 8000, "delivered", "2026-06-03")
+
+    @activity.defn(name="lookup_customer_history")
+    async def history(customer_id: str) -> CustomerHistory:
+        return CustomerHistory(customer_id, 824, [], [])
+
+    @activity.defn(name="check_refund_policy")
+    async def policy(order_id: str) -> ReturnStatus:
+        return ReturnStatus(order_id, True, False, False, False, "eligible")
 
     @activity.defn(name="issue_refund")
     async def refund(
@@ -753,7 +931,7 @@ async def _check_refund_phases(temporal: str) -> None:
             env.client,
             task_queue=queue,
             workflows=[RefundWorkflow],
-            activities=[decide, refund],
+            activities=[decide, order, history, policy, refund],
         ):
             held = await env.client.start_workflow(
                 RefundWorkflow.run,
@@ -796,6 +974,32 @@ async def _check_refund_phases(temporal: str) -> None:
             assert json.loads(turn.user_metadata.summary.data) == (
                 "Agent turn 1: decide the next step"
             )
+
+            # Every other Activity names its step in plain words too.
+            every_tool = await env.client.start_workflow(
+                RefundWorkflow.run,
+                replace(
+                    _request(8000), order_id="order-1234", customer_id="uses-every-tool"
+                ),
+                id=f"every-tool-{queue}",
+                task_queue=queue,
+            )
+            await every_tool.result()
+            history = await every_tool.fetch_history()
+            summaries = {
+                event.activity_task_scheduled_event_attributes.activity_type.name: (
+                    json.loads(event.user_metadata.summary.data)
+                )
+                for event in history.events
+                if event.HasField("activity_task_scheduled_event_attributes")
+            }
+            assert summaries == {
+                "agent_decide_next_step": "Agent turn 4: decide the next step",
+                "lookup_order": "Look up order 1234",
+                "lookup_customer_history": "Look up the customer's refund history",
+                "check_refund_policy": "Check the refund policy",
+                "issue_refund": "Issue the refund in Stripe",
+            }
 
 
 def test_stage_progress_reports_completed_after_the_refund() -> None:

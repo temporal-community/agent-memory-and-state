@@ -366,12 +366,59 @@ def _selected_model_provider(request: RefundRequest) -> str | None:
     return None
 
 
+def _dollars(cents: int) -> str:
+    return f"${cents / 100:.2f}"
+
+
+def _model_view(value: object) -> object:
+    """Copy a request or observation for the model, with money in dollars.
+
+    Every amount_cents field becomes amount, rendered as "$80.00", so the model
+    never reasons about cents. The stored request and working memory keep cents.
+    """
+
+    if isinstance(value, dict):
+        view: dict[str, object] = {}
+        for key, item in value.items():
+            if key == "amount_cents" and isinstance(item, int):
+                view["amount"] = _dollars(item)
+            else:
+                view[key] = _model_view(item)
+        return view
+    if isinstance(value, list):
+        return [_model_view(item) for item in value]
+    return value
+
+
+def _model_payload(request: RefundRequest, working_memory: list[dict]) -> str:
+    """The prompt body both providers get: the request and every observation."""
+
+    return json.dumps(
+        {
+            "request": _model_view(asdict(request)),
+            "observations": _model_view(working_memory),
+        },
+        sort_keys=True,
+    )
+
+
+# COST: which agent made a logged model call, so `refund-demo usage` can report
+# Demo 1 (the naive agent process) and Demo 2 (the Temporal Workflow) apart.
+USAGE_AGENT_TEMPORAL = "temporal"
+USAGE_AGENT_NAIVE = "naive"
+
+
 def _usage_count(source: object, name: str) -> int:
     return int(getattr(source, name, None) or 0)
 
 
 def _record_usage(
-    path: Path | None, provider: str, model: str, usage: object | None
+    path: Path | None,
+    provider: str,
+    model: str,
+    usage: object | None,
+    *,
+    agent: str = USAGE_AGENT_TEMPORAL,
 ) -> None:
     """COST: append one model call's token counts when LOG_MODEL_USAGE is on.
 
@@ -399,6 +446,7 @@ def _record_usage(
     output_tokens = _usage_count(usage, "output_tokens")
     record: dict[str, object] = {
         "timestamp": datetime.now(UTC).isoformat(timespec="seconds"),
+        "agent": agent,
         "provider": provider,
         "model": model,
         "input_tokens": input_tokens,
@@ -426,7 +474,11 @@ def _record_usage(
 
 
 def _openai_step(
-    request: RefundRequest, working_memory: list[dict], api_key: str
+    request: RefundRequest,
+    working_memory: list[dict],
+    api_key: str,
+    *,
+    agent: str = USAGE_AGENT_TEMPORAL,
 ) -> AgentStep:
     model = os.getenv("OPENAI_MODEL")
     if not model:
@@ -440,9 +492,7 @@ def _openai_step(
     usage_path = model_usage_path()
     # Client retries are disabled so Temporal owns every retry decision.
     client = OpenAI(api_key=api_key, max_retries=0, timeout=45.0)
-    payload = json.dumps(
-        {"request": asdict(request), "observations": working_memory}, sort_keys=True
-    )
+    payload = _model_payload(request, working_memory)
     try:
         response = client.responses.create(
             model=model,
@@ -466,7 +516,9 @@ def _openai_step(
     # Connection and timeout errors are not APIStatusError, so they propagate as
     # ordinary failures that Temporal retries under the RetryPolicy.
     # Log before parsing, so a billed response that fails to parse still counts.
-    _record_usage(usage_path, "openai", model, getattr(response, "usage", None))
+    _record_usage(
+        usage_path, "openai", model, getattr(response, "usage", None), agent=agent
+    )
 
     call = None
     for item in response.output:
@@ -505,7 +557,11 @@ def _openai_step(
 
 
 def _anthropic_step(
-    request: RefundRequest, working_memory: list[dict], api_key: str
+    request: RefundRequest,
+    working_memory: list[dict],
+    api_key: str,
+    *,
+    agent: str = USAGE_AGENT_TEMPORAL,
 ) -> AgentStep:
     model = os.getenv("ANTHROPIC_MODEL")
     if not model:
@@ -524,9 +580,7 @@ def _anthropic_step(
         }
         for tool in _TOOL_SCHEMAS
     ]
-    payload = json.dumps(
-        {"request": asdict(request), "observations": working_memory}, sort_keys=True
-    )
+    payload = _model_payload(request, working_memory)
     # Client retries are disabled so Temporal owns every retry decision.
     client = Anthropic(api_key=api_key, max_retries=0, timeout=45.0)
     try:
@@ -548,7 +602,9 @@ def _anthropic_step(
             non_retryable=True,
         ) from error
     # Log before parsing, so a billed response that fails to parse still counts.
-    _record_usage(usage_path, "anthropic", model, getattr(response, "usage", None))
+    _record_usage(
+        usage_path, "anthropic", model, getattr(response, "usage", None), agent=agent
+    )
 
     call = next(
         (block for block in response.content if block.type == "tool_use"),
@@ -585,6 +641,61 @@ def _anthropic_step(
     )
 
 
+def decide_next_step(
+    request: RefundRequest,
+    working_memory: list[dict],
+    *,
+    agent: str = USAGE_AGENT_TEMPORAL,
+) -> AgentStep:
+    """Choose one turn's next step: the decision both demos' agents share.
+
+    The agent_decide_next_step Activity calls this for Demo 2. Demo 1's naive
+    agent process calls it directly, with no Temporal, so both demos run the
+    same intake questions, fixed policy, or live model. `agent` only tags the
+    usage log.
+    """
+
+    required_question = (
+        _missing_question_step(working_memory)
+        if request.interactive_questions
+        else None
+    )
+    if required_question is not None:
+        # Intake requirements remain stable across model providers. Once the
+        # answers exist, the selected model autonomously chooses lookups and the
+        # final action.
+        return required_question
+    if request.use_canned_agent:
+        return _canned_step(request, working_memory)
+    provider = _selected_model_provider(request)
+    if provider == "openai":
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            raise ApplicationError(
+                "OPENAI_API_KEY is required for the OpenAI provider.",
+                type="OpenAIKeyMissing",
+                non_retryable=True,
+            )
+        return _openai_step(request, working_memory, api_key, agent=agent)
+    if provider == "anthropic":
+        api_key = os.getenv("ANTHROPIC_API_KEY")
+        if not api_key:
+            raise ApplicationError(
+                "ANTHROPIC_API_KEY is required for the Anthropic provider.",
+                type="AnthropicKeyMissing",
+                non_retryable=True,
+            )
+        return _anthropic_step(request, working_memory, api_key, agent=agent)
+    if request.dry_run:
+        return _canned_step(request, working_memory)
+    raise ApplicationError(
+        "A live model key is required for a real run. Configure "
+        "Anthropic or OpenAI, or use --dry-run for the offline policy.",
+        type="ModelKeyMissing",
+        non_retryable=True,
+    )
+
+
 @activity.defn
 def agent_decide_next_step(
     request: RefundRequest, working_memory: list[dict]
@@ -604,47 +715,7 @@ def agent_decide_next_step(
             f"${request.amount_cents / 100:.2f}, customer {request.customer_id}",
         )
 
-    required_question = (
-        _missing_question_step(working_memory)
-        if request.interactive_questions
-        else None
-    )
-    if required_question is not None:
-        # Intake requirements remain stable across model providers. Once the
-        # answers exist, the selected model autonomously chooses lookups and the
-        # final action.
-        step = required_question
-    elif request.use_canned_agent:
-        step = _canned_step(request, working_memory)
-    else:
-        provider = _selected_model_provider(request)
-        if provider == "openai":
-            api_key = os.getenv("OPENAI_API_KEY")
-            if not api_key:
-                raise ApplicationError(
-                    "OPENAI_API_KEY is required for the OpenAI provider.",
-                    type="OpenAIKeyMissing",
-                    non_retryable=True,
-                )
-            step = _openai_step(request, working_memory, api_key)
-        elif provider == "anthropic":
-            api_key = os.getenv("ANTHROPIC_API_KEY")
-            if not api_key:
-                raise ApplicationError(
-                    "ANTHROPIC_API_KEY is required for the Anthropic provider.",
-                    type="AnthropicKeyMissing",
-                    non_retryable=True,
-                )
-            step = _anthropic_step(request, working_memory, api_key)
-        elif request.dry_run:
-            step = _canned_step(request, working_memory)
-        else:
-            raise ApplicationError(
-                "A live model key is required for a real run. Configure "
-                "Anthropic or OpenAI, or use --dry-run for the offline policy.",
-                type="ModelKeyMissing",
-                non_retryable=True,
-            )
+    step = decide_next_step(request, working_memory)
 
     view["observations"] = working_memory
     turn = len(working_memory) + 1
