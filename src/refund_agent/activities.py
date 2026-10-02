@@ -143,11 +143,11 @@ def lookup_customer_history(customer_id: str) -> CustomerHistory:
         customer_id=customer_id,
         account_tenure_days=824,
         purchases=[
-            "2026-06-03, python plushy, 8000 cents",
-            "2026-02-14, mechanical keyboard, 8900 cents",
-            "2025-11-20, rubber duck, 2400 cents",
+            "2026-06-03, python plushy, $80.00",
+            "2026-02-14, mechanical keyboard, $89.00",
+            "2025-11-20, rubber duck, $24.00",
         ],
-        prior_refunds=["2025-08-09, laptop stickers, 1800 cents, approved"],
+        prior_refunds=["2025-08-09, laptop stickers, $18.00, approved"],
     )
     _line(
         "MEMORY COPY",

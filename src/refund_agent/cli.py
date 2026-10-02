@@ -406,7 +406,7 @@ async def _cleanup(args: argparse.Namespace) -> None:
         print(
             f"THE SYSTEM | refunded {intent.id} to {refund.id} amount {refund.amount}"
         )
-    print(f"THE SYSTEM | cleanup done, refunded {refunded} cents of demo charges")
+    print(f"THE SYSTEM | cleanup done, refunded ${refunded / 100:.2f} of demo charges")
 
 
 async def _watch(args: argparse.Namespace) -> None:
