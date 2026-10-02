@@ -190,6 +190,7 @@ def _stage_agent_panel(
     refund_status: str | None = None,
     loop_steps: list[dict[str, str]] | None = None,
     pending_question: dict[str, str] | None = None,
+    stopped_before_refund: bool = False,
 ) -> Panel:
     """Plain-language Worker view for a general-audience talk."""
 
@@ -198,6 +199,14 @@ def _stage_agent_panel(
     if not alive:
         body.append("WORKER GONE\n\n", style="bold red")
         body.append("Its in-memory loop is gone.\n\n", style="red")
+        if stopped_before_refund:
+            # The presenter's cue says "submit", so the screen says who stopped
+            # it. Only the main path stops the Worker before Stripe is called.
+            body.append(
+                "The demo stops the Worker here,\n"
+                "before the refund reaches Stripe.\n\n",
+                style="dim",
+            )
         # The arrow sends the eye to the right pane, where the proof is.
         body.append("Temporal still has the saved loop. →", style="red")
         return Panel(body, title="TEMPORAL WORKER", border_style="red")
@@ -511,7 +520,7 @@ async def _loop_steps_from_history(
             attributes = event.workflow_execution_signaled_event_attributes
             if attributes.signal_name == "approve":
                 approved = True
-            elif attributes.signal_name == "answer_question":
+            elif attributes.signal_name == "customer_answer":
                 question_id, answer = await converter.decode(attributes.input.payloads)
                 if question_id not in answered:
                     answered.add(question_id)
@@ -537,7 +546,7 @@ async def _loop_steps_from_history(
                         "result": "done",
                     }
                 )
-            elif name == "agent_step":
+            elif name == "agent_decide_next_step":
                 [step] = await converter.decode(attributes.result.payloads)
                 if step.get("action") == "decide":
                     recommendation = str(step.get("recommendation") or "escalate")

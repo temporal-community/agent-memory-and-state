@@ -24,7 +24,7 @@ Demo 1: Without Temporal, the agent loses its place
   Its answers and next step live only inside this agent process.
   Scripted steps · offline ledger (no Stripe)
   AGENT PROCESS  Welcome back, Nyghtowl
-  WHAT SURVIVES  LAST ORDER  Plush python · $80.00
+  WHAT SURVIVES  LAST ORDER  Python plushy · $80.00
                  OFFLINE LEDGER (Stripe stand-in)  Payment: PAID  Refund: none
   THE QUESTION   What if this agent process disappears right before the refund?
 Ask for a refund
@@ -34,17 +34,19 @@ agent> What was damaged? [Split seam]
   AGENT LOOP
     ✓ Package opened: Yes
     ✓ Damage: Split seam
-    ✓ Found order: plush python
+    ✓ Found order: python plushy
     ✓ Checked refund history: clean
     → Next: issue refund
   WORK NOT SAVED
-    Next step: issue the refund. The demo pauses here, before Stripe.
+    Next step: submit the refund.
     The answers and next step exist only inside this process.
-Press Enter to kill this agent process (before it calls Stripe)
+Press Enter to submit the refund
 
   AGENT PROCESS  PROCESS GONE
                  It held the answers and next step.
                  They are gone with it.
+                 The demo stops the process here,
+                 before the refund reaches Stripe.
   WHAT'S LEFT    Only Stripe's record: PAID, no refund.
                  That is correct. Stripe was never called.
 Press Enter to start a new agent process
@@ -67,13 +69,13 @@ Press Enter for Demo 2: the same test with Temporal
 Demo 2: With Temporal, the agent keeps its place
   Temporal keeps each answer, lookup and next step outside the Worker.
   Fixed policy (no LLM) · sample lookups · offline ledger (no Stripe)
-Ask for a refund (order 1234, the plush python)
+Ask for a refund (order 1234, the python plushy)
 you>
 Reusing your Demo 1 answers so you don't type them twice...
   TEMPORAL WORKER  AGENT LOOP
                      ✓ Package opened: Yes
                      ✓ Damage: Split seam
-                     ✓ Found order: plush python
+                     ✓ Found order: python plushy
                      ✓ Checked refund history: clean
                      → Next: issue refund
   WHAT SURVIVES    TEMPORAL        Saved so far:
@@ -83,10 +85,12 @@ Reusing your Demo 1 answers so you don't type them twice...
                                    (demo pauses here, before Stripe)
                    OFFLINE LEDGER  Payment: PAID
                                    Refund: none
-Press Enter to kill this Worker (before it calls Stripe)
+Press Enter to submit the refund
 
   TEMPORAL WORKER  WORKER GONE
                    Its in-memory loop is gone.
+                   The demo stops the Worker here,
+                   before the refund reaches Stripe.
                    Temporal still has the saved loop. →
   WHAT SURVIVES    TEMPORAL        Read from Temporal just now:
                                    Customer answers: 2
@@ -153,7 +157,7 @@ EXECUTION STATE | issuing refund: attempt 1, decision approve, idempotency key .
 THE SYSTEM | refund accepted at Stripe: re_dry_<16 hex> (dry-run, attempt 1)
 ```
 
-The second `Worker connected` line is the new Worker. No `agent_step`
-or lookup output follows it, because replay reads those results from Event
-History instead of running them again. In the default mode, "at Stripe" means
-the offline ledger.
+The second `Worker connected` line is the new Worker. No
+`agent_decide_next_step` or lookup output follows it, because replay reads
+those results from Event History instead of running them again. In the default
+mode, "at Stripe" means the offline ledger.

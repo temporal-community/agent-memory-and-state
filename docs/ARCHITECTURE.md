@@ -19,7 +19,7 @@ it retrieves the PaymentIntent and its refund list from Stripe test mode.
 
 For Demo 2, the stage connects to a Temporal dev server at `localhost:7233`, or
 starts one. It starts the `RefundApprovalAgent` Workflow, sends
-`answer_question` and `release` Signals, and polls the `stage_progress` Query
+`customer_answer` and `release` Signals, and polls the `stage_progress` Query
 while a Worker runs. It also reads Event History for each durable frame; the
 `WORKER GONE` frame takes its counts from that history, because no Worker is
 running to answer a Query.
@@ -28,8 +28,9 @@ A separate Worker subprocess ([`worker.py`](../src/refund_agent/worker.py)) poll
 a private task queue, `refund-stage-<token>`. It runs the Workflow loop
 ([`workflow.py`](../src/refund_agent/workflow.py)) and its Activities:
 
-- `agent_step`: a deterministic policy by default, or Claude or OpenAI with
-  `--real-model`
+- `agent_decide_next_step`: a deterministic policy by default, or Claude or
+  OpenAI with `--real-model`. Each call carries the summary
+  `Agent turn N: decide the next step`, shown in Event History
 - three fixture lookups: `lookup_order`, `lookup_customer_history`, and
   `check_refund_policy`
 - `issue_refund`, which writes one refund keyed by
@@ -50,12 +51,13 @@ sketch shows the loop:
 ```python
 decision: RefundDecision | None = None
 
-for _turn in range(MAX_TURNS):  # MAX_TURNS = 10
+for turn in range(MAX_TURNS):  # MAX_TURNS = 10
     step = await workflow.execute_activity(
-        agent_step,
+        agent_decide_next_step,
         args=[request, self.working_memory],
         start_to_close_timeout=timedelta(seconds=60),
         retry_policy=_MODEL_RETRY,  # up to 5 attempts per model turn
+        summary=f"Agent turn {turn + 1}: decide the next step",
     )
 
     if step.action == "decide":
@@ -67,7 +69,7 @@ for _turn in range(MAX_TURNS):  # MAX_TURNS = 10
         break
 
     if step.action == "ask_customer":
-        await workflow.wait_condition(answer_arrived)  # answer_question Signal
+        await workflow.wait_condition(answer_arrived)  # customer_answer Signal
         self.working_memory.append(customer_answer)
         continue
 
@@ -117,8 +119,8 @@ scripted, so the left column is a generic loop, not code from this repo:
 
 | Plain in-process loop | Temporal Workflow loop |
 | --- | --- |
-| `step = agent_step(request, memory)` | `step = await workflow.execute_activity(agent_step, args=[request, self.working_memory], ...)` |
-| `answer = input(question)` | An `answer_question` Signal, then `await workflow.wait_condition(...)` |
+| `step = agent_decide_next_step(request, memory)` | `step = await workflow.execute_activity(agent_decide_next_step, args=[request, self.working_memory], ...)` |
+| `answer = input(question)` | A `customer_answer` Signal, then `await workflow.wait_condition(...)` |
 | `memory.append(result)`, held in RAM | `self.working_memory.append(result)`, rebuilt by replay after a restart |
 
 ## Useful commands

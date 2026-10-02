@@ -227,7 +227,7 @@ def _phase(rows: list[dict[str, object]], status: str) -> str:
     ]
     if tools:
         return "agent loop, retrieved: " + ", ".join(tools)
-    if "agent_step" in scheduled or "agent_step" in completed:
+    if "agent_decide_next_step" in scheduled or "agent_decide_next_step" in completed:
         return "agent loop, reasoning"
     return "starting"
 
@@ -322,7 +322,7 @@ async def _inspect(args: argparse.Namespace) -> None:
         _print_real_stripe_view(args.workflow_id, args.payment_intent)
 
 
-_DEMO_PAYMENT_DESCRIPTION = "plush python (durable refund demo)"
+_DEMO_PAYMENT_DESCRIPTION = "python plushy (durable refund demo)"
 # cleanup also matches charges seeded before the description was renamed, so a
 # stale test balance from an earlier rehearsal still reconciles.
 _DEMO_PAYMENT_DESCRIPTIONS = (
@@ -622,7 +622,7 @@ def _parser() -> argparse.ArgumentParser:
     start.add_argument("--amount-cents", type=int, default=8000)
     start.add_argument(
         "--reason",
-        default="The plush python arrived with a split seam",
+        default="The python plushy arrived with a split seam",
     )
     mode = start.add_mutually_exclusive_group()
     mode.add_argument("--dry-run", action="store_true", dest="dry_run")
