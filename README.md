@@ -30,6 +30,7 @@ the two stays visible.
   replay added 0 calls (measured).
 - [Run the guided demo](#run-the-guided-demo): one command after setup; the
   default run needs no keys.
+- [Takeaways](#takeaways): the three lines the demo ends on.
 
 **What happens to an AI agent's in-flight work when its process dies?**
 
@@ -601,6 +602,25 @@ covers live-model, Stripe, timeout, usage-log, and Temporal Web errors.
 
 Every command entry point is in [Useful commands](docs/ARCHITECTURE.md#useful-commands);
 run the tests with `uv run --extra dev pytest -q`.
+
+## Takeaways
+
+The demo ends on these, in the stage's closing frame:
+
+- **Without Temporal, the customer had to start over.** The agent's answers
+  and next step lived only in its process, and they died with it.
+- **With Temporal, a new Worker picked up at the saved next action,**
+  `issue refund`, without asking the customer again.
+- **Memory helps the agent decide. Temporal records where the work stands.
+  Stripe knows whether money moved.**
+
+And two things to keep in mind when you build your own:
+
+- **Durable execution can run a step more than once.** Give every side effect
+  an idempotency key that the receiving system checks, as the refund does
+  here.
+- **A crash that starts over pays for the model calls again.** Replaying from
+  Event History doesn't; only a call in flight at the crash can bill twice.
 
 ## Resources
 
