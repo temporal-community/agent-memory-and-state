@@ -101,8 +101,8 @@ def _closing(refund_status: str = "succeeded") -> Group:
     return Group(
         Panel(result, title="The difference", border_style="green"),
         Panel(
-            "Memory helps the agent decide.\n"
-            "Temporal records where the work stands.\n"
+            "Memory helps reasoning continue.\n"
+            "Temporal helps the operation continue.\n"
             "Stripe knows whether money moved.",
             border_style="white",
         ),

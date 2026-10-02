@@ -217,8 +217,8 @@ def test_stage_closing_states_the_observable_outcome() -> None:
     assert "No repeated questions" not in panels[0].renderable.plain
     assert "One submitted request, one refund" not in panels[0].renderable.plain
     assert panels[1].renderable.splitlines() == [
-        "Memory helps the agent decide.",
-        "Temporal records where the work stands.",
+        "Memory helps reasoning continue.",
+        "Temporal helps the operation continue.",
         "Stripe knows whether money moved.",
     ]
 

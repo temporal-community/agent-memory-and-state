@@ -114,8 +114,8 @@ Press Enter for the takeaway
 The difference
   Without Temporal: the customer had to start over.
   With Temporal: a new Worker picked up at the saved next action.
-Memory helps the agent decide.
-Temporal records where the work stands.
+Memory helps reasoning continue.
+Temporal helps the operation continue.
 Stripe knows whether money moved.
 Stage logs: .demo-state/stage-<token>
 ```
