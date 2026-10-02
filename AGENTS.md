@@ -94,7 +94,7 @@ model.
   Workflow input so replacement Workers cannot switch providers based on key
   availability.
 - Build the Anthropic and OpenAI clients with `max_retries=0` and a timeout
-  shorter than the `agent_step` start-to-close timeout, and keep
+  shorter than the `agent_decide_next_step` start-to-close timeout, and keep
   `stripe.max_network_retries = 0`. The Temporal Activity retry policy is the
   only retry layer, so every retry is visible in Temporal.
 - Keep the Stripe refund call's client timeout (`STRIPE_TIMEOUT_SECONDS`: 3 s

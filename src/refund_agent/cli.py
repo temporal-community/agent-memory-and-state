@@ -227,7 +227,7 @@ def _phase(rows: list[dict[str, object]], status: str) -> str:
     ]
     if tools:
         return "agent loop, retrieved: " + ", ".join(tools)
-    if "agent_step" in scheduled or "agent_step" in completed:
+    if "agent_decide_next_step" in scheduled or "agent_decide_next_step" in completed:
         return "agent loop, reasoning"
     return "starting"
 

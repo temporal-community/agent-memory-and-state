@@ -55,16 +55,17 @@ the `Stage logs:` line printed at the end. The Workflow type is
    answers, `item_opened`: `Yes` and `damage`: `Split seam`), and the
    `lookup_order` and `lookup_customer_history` results.
 2. After the kill (`WORKER GONE`), use the History tab. The Workflow is still
-   `Running`. It shows two `WorkflowExecutionSignaled` (`answer_question`)
-   events, the completed `agent_step`, `lookup_order`, and
+   `Running`. It shows two `WorkflowExecutionSignaled` (`customer_answer`)
+   events, the completed `agent_decide_next_step`, `lookup_order`, and
    `lookup_customer_history` Activities, no `issue_refund`, and no pending
-   Activities. This is the same history the stage's `WORKER GONE` pane reads.
-   Don't run a Query now: Queries need a live Worker.
-3. After recovery, the Workflow is `Completed`. No `agent_step`, lookup, or
-   `answer_question` event repeats, because the new Worker replayed them
-   from history. The new application-level work is the `release` Signal and one
-   `issue_refund` Activity at attempt 1, alongside the usual Workflow Task
-   events. The result's `idempotency_key` is
+   Activities. Each `agent_decide_next_step` row carries its summary, such as
+   `Agent turn 1: decide the next step`. This is the same history the stage's
+   `WORKER GONE` pane reads. Don't run a Query now: Queries need a live Worker.
+3. After recovery, the Workflow is `Completed`. No `agent_decide_next_step`,
+   lookup, or `customer_answer` event repeats, because the new Worker replayed
+   them from history. The new application-level work is the `release` Signal
+   and one `issue_refund` Activity at attempt 1, alongside the usual Workflow
+   Task events. The result's `idempotency_key` is
    `durable-refund-<sha256 of workflow_id:run_id>`. That `ActivityTaskStarted`
    event's identity is the new Worker's `<pid>@refund-demo`, with a different
    PID from the first Worker's earlier `WorkflowTaskStarted` events. While the

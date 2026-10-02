@@ -76,22 +76,25 @@ def _recorded_loop(
                 event_id=len(events) + 1,
                 workflow_execution_signaled_event_attributes=(
                     WorkflowExecutionSignaledEventAttributes(
-                        signal_name="answer_question",
+                        signal_name="customer_answer",
                         input=_payloads(question_id, value),
                     )
                 ),
             )
         )
 
-    activity("agent_step", AgentStep(action="ask_customer", question_id="item_opened"))
+    def agent_turn(**step) -> None:
+        activity("agent_decide_next_step", AgentStep(**step))
+
+    agent_turn(action="ask_customer", question_id="item_opened")
     answer("item_opened", "Yes")
-    activity("agent_step", AgentStep(action="ask_customer", question_id="damage"))
+    agent_turn(action="ask_customer", question_id="damage")
     answer("damage", "Split seam")
-    activity("agent_step", AgentStep(action="use_tool", tool="lookup_order"))
+    agent_turn(action="use_tool", tool="lookup_order")
     activity("lookup_order", {"item": "python plushy"})
-    activity("agent_step", AgentStep(action="use_tool", tool="lookup_customer_history"))
+    agent_turn(action="use_tool", tool="lookup_customer_history")
     activity("lookup_customer_history", {"prior_refunds": []})
-    activity("agent_step", AgentStep(action="decide", recommendation=recommendation))
+    agent_turn(action="decide", recommendation=recommendation)
     if approved:
         events.append(
             HistoryEvent(

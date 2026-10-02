@@ -668,7 +668,7 @@ async def _drive_temporal_loop(
                     str(pending.get("suggested_answer") or ""),
                 )
                 await handle.signal(
-                    RefundWorkflow.answer_question,
+                    RefundWorkflow.customer_answer,
                     args=[question_id, answer],
                 )
                 sent_questions.add(question_id)
