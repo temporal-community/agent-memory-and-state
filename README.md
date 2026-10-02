@@ -10,9 +10,30 @@
 
 </div>
 
+This repo shows what memory and execution state each do for an AI agent, and
+Temporal's role: it keeps the execution state outside the agent's process. The
+agent is a plain Python loop with no agent framework, so the boundary between
+the two stays visible.
+
+**What's covered:**
+
+- [The demo](#see-the-idea-in-15-seconds): the naive agent and the
+  Temporal-backed agent, side by side.
+- [Memory and execution state](#memory-and-execution-state): what each one
+  holds, and where to find it.
+- [Temporal's role and limits](#what-this-demo-proves): Temporal keeps where
+  the work stands; Stripe, not Temporal, says whether money moved.
+- [Gotchas](#when-event-history-grows-claim-check-and-continue-as-new): Event
+  History grows every turn; a claim check and continue-as-new keep it in bounds.
+- [Cost to run](#cost-to-run): a measured GPT-5.6 Luna pass used 4 model calls,
+  2,845 tokens, $0.0009. Starting over pays about that again (estimated);
+  replay added 0 calls (measured).
+- [Run the guided demo](#run-the-guided-demo): one command after setup; the
+  default run needs no keys.
+
 **What happens to an AI agent's in-flight work when its process dies?**
 
-This demo kills a customer-support refund agent one step before it refunds
+The demo kills a customer-support refund agent one step before it refunds
 the customer. The failure mode is **lost loop position**. By then the agent has
 asked the customer two questions, looked up the order and the customer's
 refund history, and chosen `issue refund`. When the naive agent's process dies,
@@ -31,11 +52,6 @@ returned `succeeded` from Stripe test mode; one offline run each of
 and lint. Not re-run on this date: the live-model pass, last measured on
 2026-09-30 on GPT-5.6 Luna (offline ledger, 4 model calls, 2,845 tokens,
 $0.0009). The Claude path has not been run.
-
-The point is to show what memory and execution state each do for an agent, and
-Temporal's role: it keeps the execution state outside the agent's process. See
-[Memory and execution state](#memory-and-execution-state). There is no agent
-framework, so the boundary stays visible.
 
 **What is real and what is staged:**
 
