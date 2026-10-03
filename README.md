@@ -25,8 +25,8 @@ the two stays visible.
   the work stands; Stripe, not Temporal, says whether money moved.
 - [Gotchas](#when-event-history-grows-claim-check-and-continue-as-new): Event
   History grows every turn; a claim check and continue-as-new keep it in bounds.
-- [Cost to run](#cost-to-run): on GPT-5.6 Luna, a measured pass used 4 model
-  calls, about 2,950 tokens, $0.0009. Starting over after the kill paid it
+- [Cost to run](#cost-to-run): on GPT-5.6 Luna, a measured Demo 1 pass used 4
+  model calls, 2,962 tokens, $0.0009. Starting over after the kill paid it
   again (4 calls, 2,972 tokens, $0.0009, measured in Demo 1); Temporal's replay
   made 0 calls (measured in Demo 2).
 - [Run the guided demo](#run-the-guided-demo): one command after setup; the
@@ -86,7 +86,7 @@ passed. Not re-run on this date: `--real` without `--real-model`,
 ![Animated comparison: the naive agent loses its answers and restarts, while the Temporal-backed agent resumes the saved loop](assets/demo-reel.gif)
 
 [Watch or download the MP4 version](assets/demo-reel.mp4), or
-[view the presentation deck: *Agentic Memory and State* (PDF)](docs/agentic-memory-and-state.pdf).
+[view the presentation deck: *Agentic Memory and State*, August 2026 version (PDF)](docs/agentic-memory-and-state.pdf).
 
 | Moment | Naive agent | Durable agent |
 | --- | --- | --- |
@@ -114,12 +114,13 @@ Links, the code as presented, and further reading are in
 
 ## Memory and execution state
 
-An agent needs both, and they do different jobs.
+An agent needs all of these, and they do different jobs. Only context lives
+inside the loop. Long-term memory and state live outside it.
 
 | | What it helps with | In this demo | Where to find it |
 | --- | --- | --- | --- |
-| **Context** | What the model sees for this one decision | The refund request plus what's loaded from memory (the answers and lookups so far), sent on each turn | The input of each `agent_decide_next_step` Activity in Event History |
-| **Memory** | What the agent knows or can look up, so it can reason | The customer's two answers and the lookups: order 1234 and the refund history of the demo customer, Nyghtowl | Naive agent: a dict inside its process (`naive_refund.py`). Durable agent: `working_memory` in the Workflow (`workflow.py`), rebuilt from history after a restart. On screen, lookups are marked `(memory)` |
+| **Context** (working memory) | What the model sees for this one decision. The loop sends it again on every turn | The refund request, the customer's two answers, and the lookups so far: order 1234 and the refund history of the demo customer, Nyghtowl | `working_memory`: a list in the naive agent's process (`naive_refund.py`), or a Workflow field (`workflow.py`) that replay rebuilds. It is the input of each `agent_decide_next_step` Activity in Event History |
+| **Long-term memory** (a memory store) | What the agent carries across runs: past cases, lessons, notes it wrote | None, on purpose. On screen, lookups are tagged `(memory)` because they stand in for retrieval, but they read fixture records, and nothing is saved across runs | Your store: a vector store, a knowledge base, or memory files |
 | **Execution state** | Where the work stands: which steps finished and what runs next, so the work can continue after a crash without redoing it | 2 answers, 2 lookups (3 when a live model also checks the refund policy), next action `issue refund` | Temporal: the Workflow's Event History in the Temporal UI (http://localhost:8233), or `uv run refund-demo inspect <workflow-id>` |
 | **Effect state** | Whether the side effect really happened | Whether Stripe holds a refund for the payment | Stripe: the Dashboard in test mode, where the refund carries `temporal_workflow_id` (offline: the ledger) |
 
@@ -134,19 +135,24 @@ replaying them." Temporal doesn't decide what the agent does, doesn't make the
 model's answer right, and doesn't make the refund exactly once; the Stripe
 idempotency key does that.
 
-**Memory alone isn't enough.** A memory store could bring back the answers, but
-not where the work stands: whether `issue refund` is next, already running, or
-done. When two copies disagree, ask which record wins: Temporal for where the
-work stands, Stripe for whether money moved. A durable job table or a careful
-state machine can hold execution state too; in this demo, Temporal does.
+**Why not just add a memory store?** A memory store could bring back the
+answers, but answers alone can't say whether the refund went out or which step
+runs next, and a store doesn't restart the run. It can hold a copy of
+execution state; the record holds the original. After a crash, only the
+records answer "What's my next step?" (Temporal) and "Did I submit this
+refund?" (Stripe). A durable job table or a careful state machine can hold
+execution state too; in this demo, Temporal does.
+
+**Facts have owners.** Each owner is a system of record, and its record wins
+when a copy disagrees: Temporal for execution state, Stripe for effect state.
+A real system also has authorization state (may this agent act? Read it live
+from your auth system before acting) and domain state (the business facts, in
+your database). For any fact, ask: does another system already own it?
 
 The stage leads with the crash before the refund because the customer's cost is
 visible; the [manual walkthrough](docs/REFUND_DEMO.md) covers the later loss,
-after Stripe commits. A real system also has authorization state (may the agent
-act?) and domain state (the business facts). Read
-[Memory, state, and authority](docs/CONCEPTS.md) for the complete model,
-including how one fact can play several roles, working and long-term memory,
-the lifespan framing, and the exactly-once misconception.
+after Stripe commits. [Memory, state, and authority](docs/CONCEPTS.md) has the
+full model.
 
 ## What this demo proves
 
@@ -342,10 +348,13 @@ running (see above), watch it at <http://localhost:8233>:
    `customer_answer` entries, and both lookup results.
 2. After the kill (`WORKER GONE`), open the History tab. The Workflow is still
    `Running`, with the two answers and completed lookups, no `issue_refund`, and
-   no pending Activity. Don't run a Query now: Queries need a live Worker.
+   no pending Activity. Running with no Worker is normal: the Workflow lives on
+   the server, and Workers only poll its task queue. On the Workers tab, the old
+   `<pid>@refund-demo` stays listed for up to 5 minutes, and its Last Accessed
+   time gets older. Don't run a Query now: Queries need a live Worker.
 3. After recovery, the Workflow is `Completed`. No `agent_decide_next_step`,
    lookup, or `customer_answer` event repeats, and one `issue_refund` ran at
-   attempt 1.
+   attempt 1, on the new Worker (`<pid>@refund-demo` with a new PID).
 
 The [Temporal Web guide](docs/TEMPORAL_WEB.md#what-to-check-at-each-frame) has
 the full event list for each step.
@@ -475,51 +484,56 @@ measured calls, tokens, dollars, and date. -->
 
 ## When Event History grows: claim check and continue-as-new
 
-Event History records every Activity's input and result; that record is how
-the replacement Worker resumes. This loop resends all of `working_memory` to
-`agent_decide_next_step` each turn, so recorded bytes grow with the square of the turn
-count. The demo stays under 7 KB of payloads (it stops at `MAX_TURNS = 10`),
-but a payload-only model with 20 KiB tool results and no turn cap crosses 4 MiB
-around turn 20, the 10 MiB warning around turn 32, and the 50 MiB limit around
-turn 72, still under 1,000 events. Bytes reach the limits before the event
-count does. The model input grows the same way: the turn-70 model call alone
-sends about 350K input tokens, about $1.06 on Claude Sonnet 4.6 at the
-2026-09-29 list price of $3 per million input tokens (an estimate: payload
-bytes only, about 4 bytes per token, uncached). Keep small observations in
-Workflow state, large records in a memory store behind a key (a claim check;
-the Python SDK's External Storage), and roll a long loop over with
-continue-as-new.
+Every step is saved, so a long agent run builds a big history.
 
-**Measured in the fleet demo.** The companion
-[fleet demo](https://github.com/temporal-community/temporal-ai-hitl-adk-langgraph)
-ran one full pass per tab on 2026-09-30. On the Human → Agent tab, with the
-model calls inline, the parent Workflow ended at 4,947 events and 9,443,220
-bytes (9.0 MiB), about 1 MiB under the 10 MiB warning. On the Cross-Framework
-tab, with the model calls in child Workflows, the parent ended at 2,154 events
-and 408,054 bytes (0.4 MiB).
+- **Why it's saved.** Event History records every Activity's input and result.
+  Replay reads it to rebuild the agent after a crash.
+- **Why it grows.** Each turn sends all of `working_memory` to
+  `agent_decide_next_step` again, and each send is saved. So the history grows
+  faster than the conversation: with the square of the turn count.
+- **Why it matters.** A big history makes replay after a crash slower. One
+  payload (an input or a result) can be at most 2 MB, and one run's history at
+  most 50 MB (server defaults).
 
-The fleet rolls each driver Workflow over at 10,000 events, at a quiet point
-when the driver is idle with nothing pending
-([continue-as-new code](https://github.com/temporal-community/temporal-ai-hitl-adk-langgraph/blob/as-presented-2026-07/agent_fleet/workflows.py#L390-L414)).
-The parent has the same guard, but a pass ends before it fires. Both count
-events, not bytes. The inline parent reached 9.0 MiB at 4,947 events, so on a
-longer run it would pass the 10 MiB warning long before 10,000 events.
+An example (an estimate: payloads only, 20 KiB tool results, no turn cap):
+turn 1 saves 20 KiB, turn 2 saves 40 KiB, and turn 20 alone saves 400 KiB. By
+turn 20 the total is about 4 MiB, where Temporal suggests continue-as-new. The
+10 MB warning comes around turn 32 and the 50 MB limit around turn 72, still
+under 1,000 events: bytes reach the limits first. The model input grows the
+same way: the turn-70 model call alone sends about 350K input tokens, about
+$1.06 on Claude Sonnet 4.6 at the 2026-09-29 list price of $3 per million input
+tokens (about 4 bytes per token, uncached). This demo stops at
+`MAX_TURNS = 10` and stays under 7 KB of payloads.
 
-On the Agent → Human tab, one full pass (51 orders) made 322 model calls and
-used 732,256 tokens, $1.49, on `gemini-3.8-flash` with its default (medium)
-thinking, at list prices valid through 2026-12-31. That leaves out 51 venue
-searches, also Gemini calls, whose tokens LangGraph doesn't keep. On main, the
-fleet README's
-[history note](https://github.com/temporal-community/temporal-ai-hitl-adk-langgraph/blob/main/README.md#what-this-is-not)
-gives these sizes rounded in MB, and its
-[Cost to run](https://github.com/temporal-community/temporal-ai-hitl-adk-langgraph/blob/main/README.md#cost-to-run)
-has every tab and what changes the cost.
+Two fixes:
+
+- **Claim check: save a ticket, not the data.** It works like a coat check.
+  Your store (S3 or a database) keeps the coat; Event History keeps only the
+  ticket, a small key. The ticket replaces the big value in the Activity's
+  result and in the next step's input, and an Activity reads the data back
+  when it needs it. The Python SDK's External Storage does this for payloads of
+  256 KiB or more (S3 driver, Public Preview); lower the threshold for an agent
+  loop. A claim check shrinks the history, not the prompt.
+- **Continue-as-new: a fresh history, same Workflow.** It works like a new
+  notebook: copy over only the notes you need. At a quiet point, once
+  `workflow.info().is_continue_as_new_suggested()` returns `True`, the Workflow
+  ends this run and starts a new one with the same Workflow ID, a new Run ID,
+  and an empty history. The new run gets only the input you pass it, such as
+  the turns done and the customer's answers. The old run stays readable until
+  retention ends, and Signals, Queries, and Updates sent by Workflow ID reach
+  the newest run. In this repo, roll over only before the refund, because its
+  idempotency key uses the Run ID.
+
+**Measured in the [fleet demo](https://github.com/temporal-community/temporal-ai-hitl-adk-langgraph)**
+(2026-09-30): with model calls inline, the parent Workflow ended at 4,947
+events and 9.0 MiB; with them in child Workflows, 2,154 events and 0.4 MiB
+([details](docs/HISTORY_GROWTH.md#measured-in-the-fleet-demo)).
 
 | Threshold | History size | Events | What happens |
 | --- | --- | --- | --- |
 | Continue-as-new suggested | 4 MiB | 4,096 | `workflow.info().is_continue_as_new_suggested()` returns `True`. Nothing is enforced. Python Workflow code gets only a yes/no, not a reason. |
-| Warning | 10 MiB | 10,240 | The server logs warnings. |
-| Limit | 50 MiB | 51,200 | The Workflow Execution is terminated. |
+| Warning | 10 MB | 10,240 | The server logs warnings. |
+| Limit | 50 MB | 51,200 | The Workflow Execution is terminated. |
 | One payload | 2 MB. The warning comes at a few hundred KB; the docs list both 256 KB and 512 KB | n/a | A payload the Workflow produces fails the Workflow Task, and on Python SDK 1.23+ the run stays open until you deploy a fix. An oversized Activity result fails that Activity attempt instead. The SDK enforces this only when the server reports its limits at Worker start. |
 
 Temporal server defaults, per the
@@ -539,7 +553,10 @@ The demo doesn't run continue-as-new; [what it looks like](docs/HISTORY_GROWTH.m
 
 Persisted chat history lets a new process decide again. Durable execution
 resumes the decision the agent already made. And Stripe, not either of them,
-says whether money moved. The [full comparison](docs/COMPARISON.md) has each
+says whether money moved. A checkpoint recovers position, not a call that
+already went out: a step that was running at the crash runs again, in a
+LangGraph checkpointer and in Temporal, so a side effect needs an idempotency
+key. The [full comparison](docs/COMPARISON.md) has each
 product's details and sources as read on 2026-09-29, and when you don't need
 Temporal.
 
@@ -576,23 +593,31 @@ Temporal.
   says `OFFLINE LEDGER (Stripe stand-in)` (with `--real`, `STRIPE (test mode)`),
   but the agent's lines, the Worker log, and the `issue_refund` summary in
   Event History still say "Stripe" as the story's name for the effect owner.
-- **Not a memory system.** Temporal holds execution state, not the agent's
-  memory, and [Event History is bounded](#when-event-history-grows-claim-check-and-continue-as-new).
-  The demo doesn't prescribe how agent memory should be stored or managed;
-  where durable execution and long-term memory best fit together is an open
-  design question.
+- **Not a memory store.** Temporal rebuilds this run's working memory by
+  replay, but long-term memory is still a store you own, and
+  [Event History is bounded](#when-event-history-grows-claim-check-and-continue-as-new).
+  Temporal can run the store's reads and writes as Activities, so each one is
+  recorded and retried like any other step. How best to combine the two is
+  still an open design question.
 - **Not exactly-once.** One request can mean two calls and still one refund,
   because both calls share one idempotency key.
 - **Not Temporal Cloud.** The clients connect to a local dev server, with no TLS
   or API-key options.
 
-**Trade-offs.** You may not need Temporal when only the conversation matters,
-when your runtime already keeps execution state, or for a short, fixed pipeline
-on a job table
-([when you don't need Temporal](docs/COMPARISON.md#when-you-dont-need-temporal)).
-Event History holds customer data, such as the customer's answers and every
-Activity's input and result, so plan its retention and add an encryption codec.
-You also have to run a Temporal service or use Temporal Cloud.
+**Trade-offs.**
+
+| You might not need Temporal when | Temporal earns its place when |
+| --- | --- |
+| The loop is short | Work outlives a process |
+| The user is right there | The agent waits a long time on people or systems |
+| Losing a run only means asking again | Retries hit real side effects |
+| Your runtime already resumes runs | A deploy lands in the middle of a task |
+
+Its costs: Event History holds customer data, such as the customer's answers
+and every Activity's input and result, so plan its retention and add an
+encryption codec. Someone has to run the Temporal service, or pay for Temporal
+Cloud. Workflow code must be deterministic, and changes to it need versioning.
+See [when you don't need Temporal](docs/COMPARISON.md#when-you-dont-need-temporal).
 
 ## Troubleshooting
 
@@ -656,8 +681,13 @@ And two things to keep in mind when you build your own:
   [`as-presented-2026-09`](https://github.com/temporal-community/temporal-ai-agent-memory-state-stripe/tree/as-presented-2026-09).
   `main` keeps moving; link the tag when you cite the talk.
 - **Further reading:** [Temporal docs](https://docs.temporal.io), the
-  [Python SDK](https://github.com/temporalio/sdk-python), and
+  [Python SDK](https://github.com/temporalio/sdk-python),
+  [continue-as-new](https://docs.temporal.io/workflow-execution/continue-as-new),
+  [External Storage](https://docs.temporal.io/external-storage), and
   [Stripe idempotent requests](https://docs.stripe.com/api/idempotent_requests).
+- **For your coding agent:** the
+  [Temporal developer skill](https://github.com/temporalio/skill-temporal-developer),
+  installed with `npx skills add temporalio/skill-temporal-developer`.
 
 <!-- TODO before publishing: video URL with UTM and the Temporal & AI Series
 playlist URL (here and in Videos), related videos (human-in-the-loop,
