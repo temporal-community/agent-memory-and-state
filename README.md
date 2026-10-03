@@ -11,7 +11,7 @@
 </div>
 
 This repo shows what memory and execution state each do for an AI agent, and
-Temporal's role: it keeps the execution state outside the agent's process. The
+Temporal's role: it keep track of the execution state happening outside the agent's process. The
 agent is a plain Python loop with no agent framework, so the boundary between
 the two stays visible.
 
