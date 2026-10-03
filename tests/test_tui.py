@@ -25,8 +25,8 @@ from refund_agent.naive_refund import _demo_frame, _process_interactive
 _CACHED_STEPS = [
     {"kind": "answer", "question_id": "item_opened", "result": "Yes"},
     {"kind": "answer", "question_id": "damage", "result": "Split seam"},
-    {"kind": "tool", "label": "Found order", "result": "python plushy"},
-    {"kind": "tool", "label": "Checked refund history", "result": "clean"},
+    {"kind": "tool", "label": "Order", "result": "python plushy"},
+    {"kind": "tool", "label": "Refund history", "result": "clean"},
     {"kind": "ready", "label": "Next action", "result": "issue refund"},
 ]
 
@@ -475,7 +475,7 @@ def test_naive_agent_loop_reaches_the_refund_before_stripe_is_called() -> None:
             "_loop_steps": [
                 {"kind": "answer", "question_id": "item_opened", "result": "Yes"},
                 {"kind": "answer", "question_id": "damage", "result": "Split seam"},
-                {"kind": "tool", "label": "Found order", "result": "python plushy"},
+                {"kind": "tool", "label": "Order", "result": "python plushy"},
                 {"kind": "ready", "result": "issue refund"},
             ],
         },
@@ -489,6 +489,7 @@ def test_naive_agent_loop_reaches_the_refund_before_stripe_is_called() -> None:
     assert "Please refund my python plushy" in text
     assert "AGENT LOOP" in text
     assert "✓ Damage: Split seam" in text
+    assert "✓ Order: python plushy (memory)" in text
     assert "→ Next: issue refund" in text
     assert "WORK NOT SAVED" in text
     assert "Next step: submit the refund." in text
@@ -676,13 +677,13 @@ def test_naive_stage_frame_has_no_footer_cue() -> None:
         ),
         (
             tui.DemoSetup(real_stripe=True, model_provider="anthropic"),
-            "Scripted steps · Stripe test mode",
+            "Live model (anthropic) · sample lookups · Stripe test mode",
             "Live model (anthropic) · sample lookups · Stripe test mode",
             "STRIPE (test mode)",
         ),
         (
             tui.DemoSetup(model_provider="openai"),
-            "Scripted steps · offline ledger (no Stripe)",
+            "Live model (openai) · sample lookups · offline ledger (no Stripe)",
             "Live model (openai) · sample lookups · offline ledger (no Stripe)",
             "OFFLINE LEDGER (Stripe stand-in)",
         ),

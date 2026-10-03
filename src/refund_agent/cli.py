@@ -406,7 +406,7 @@ async def _cleanup(args: argparse.Namespace) -> None:
         print(
             f"THE SYSTEM | refunded {intent.id} to {refund.id} amount {refund.amount}"
         )
-    print(f"THE SYSTEM | cleanup done, refunded {refunded} cents of demo charges")
+    print(f"THE SYSTEM | cleanup done, refunded ${refunded / 100:.2f} of demo charges")
 
 
 async def _watch(args: argparse.Namespace) -> None:
@@ -494,6 +494,18 @@ def _usage_dollars(total: dict[str, int], prices: dict[str, float]) -> float:
     return sum(total[name] * prices[name] for name in _USAGE_LABELS) / 1_000_000
 
 
+# Which agent logged the call. Records written before the tag existed came from
+# the agent_decide_next_step Activity, the only caller then.
+_USAGE_AGENTS = {
+    "naive": "Demo 1: naive agent process (no Temporal)",
+    "temporal": "Demo 2: Temporal Workflow",
+}
+
+
+def _usage_agent(record: dict[str, Any]) -> str:
+    return str(record.get("agent") or "temporal")
+
+
 def _usage(args: argparse.Namespace) -> None:
     directory = Path(args.state_dir) if args.state_dir else state_dir()
     path = directory / MODEL_USAGE_FILE
@@ -529,6 +541,17 @@ def _usage(args: argparse.Namespace) -> None:
     if unreadable:
         print(f"MODEL USAGE | skipped {unreadable} unreadable lines")
 
+    # Demo 1 first, then Demo 2, each with its own calls, tokens, and dollars.
+    agents = {_usage_agent(record) for record in records}
+    for agent in sorted(agents, key=lambda name: (name != "naive", name)):
+        agent_records = [record for record in records if _usage_agent(record) == agent]
+        print(f"\n{_USAGE_AGENTS.get(agent, agent)}")
+        _print_usage_totals(agent_records, args)
+
+
+def _print_usage_totals(
+    records: list[dict[str, Any]], args: argparse.Namespace
+) -> None:
     for (provider, model), total in _usage_totals(records).items():
         if args.input_price is not None:
             prices: dict[str, float] | None = {
@@ -544,7 +567,7 @@ def _usage(args: argparse.Namespace) -> None:
         else:
             prices = _LIST_PRICES.get(model)
             price_note = f"list prices as of {_LIST_PRICES_DATE}"
-        print(f"\n{provider}:{model}")
+        print(f"{provider}:{model}")
         print(f"  {'model calls':<15}{total['calls']:>10,}")
         for name, label in _USAGE_LABELS.items():
             cost = (

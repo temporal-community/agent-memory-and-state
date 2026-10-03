@@ -4,6 +4,10 @@ The agent asks questions, observes answers, performs lookups, and chooses its
 next action. Its Worker then disappears before calling the refund system. Its
 process-local working memory disappears too. Stripe correctly retains the paid
 charge with no refund, but it does not own the interrupted agent loop.
+
+Each turn calls the same decide_next_step as Demo 2's agent_decide_next_step
+Activity, in this process with no Temporal: fixed policy by default, or the
+live model with --real-model.
 """
 
 from __future__ import annotations
@@ -14,11 +18,25 @@ import os
 import sys
 import time
 import uuid
+from dataclasses import asdict
 from pathlib import Path
 
 import stripe
 
+from refund_agent.activities import (
+    TOOL_HISTORY,
+    TOOL_ORDER,
+    TOOL_POLICY,
+    USAGE_AGENT_NAIVE,
+    _selected_model_provider,
+    check_refund_policy,
+    decide_next_step,
+    lookup_customer_history,
+    lookup_order,
+)
+from refund_agent.models import AgentStep, RefundRequest
 from refund_agent.settings import load_env_file, validate_stripe_key
+from refund_agent.workflow import MAX_TURNS
 
 # Color only when writing to a real terminal, so piped output stays clean.
 _COLOR = sys.stdout.isatty()
@@ -109,61 +127,127 @@ def _existing_refund(order: str) -> dict | None:
     )
 
 
-def _run_interactive_agent_loop() -> None:
-    """Choose questions and lookups until the next action is the refund."""
+def _naive_request(args: argparse.Namespace) -> RefundRequest:
+    """The request Demo 2's Workflow gets, held only in this process."""
 
+    request = RefundRequest(
+        request_id=f"naive-{uuid.uuid4().hex[:8]}",
+        order_id=f"order-{args.order}",
+        customer_id="cus_demo_42",
+        payment_intent_id=args.payment_intent,
+        amount_cents=args.amount_cents,
+        reason=args.reason,
+        dry_run=not args.real,
+        item_opened=None,
+        damage=None,
+        interactive_questions=True,
+        hold_before_effect=args.hold_before_effect,
+        use_canned_agent=not args.real_model,
+        model_provider=args.model_provider,
+    )
+    # Offline, decide_next_step falls back to the fixed policy when no provider
+    # is configured. --real-model promises the live model, so fail instead.
+    if args.real_model and _selected_model_provider(request) is None:
+        raise RuntimeError("--real-model requires ANTHROPIC_API_KEY or OPENAI_API_KEY")
+    return request
+
+
+def _lookup(tool: str | None, request: RefundRequest) -> dict:
+    # The same fixtures and dispatch as RefundWorkflow._run_tool, run in this
+    # process: no Activity, so nothing is recorded outside it.
+    if tool == TOOL_ORDER:
+        return asdict(lookup_order(request.order_id))
+    if tool == TOOL_HISTORY:
+        return asdict(lookup_customer_history(request.customer_id))
+    if tool == TOOL_POLICY:
+        return asdict(check_refund_policy(request.order_id))
+    raise RuntimeError(f"agent asked for an unknown tool: {tool}")
+
+
+def _tool_event(tool: str, result: dict) -> dict[str, str]:
+    # The same labels Demo 2 shows for its recorded lookups.
+    if tool == TOOL_ORDER:
+        label, shown = "Order", str(result.get("item") or "python plushy")
+    elif tool == TOOL_HISTORY:
+        label, shown = "Refund history", "clean"
+    else:
+        label = "Refund policy"
+        shown = "eligible" if result.get("eligible_for_refund") else "not eligible"
+    return {"kind": "tool", "tool": tool, "label": label, "result": shown}
+
+
+def _run_interactive_agent_loop(request: RefundRequest) -> AgentStep:
+    """Run Demo 2's loop in process until the agent decides.
+
+    Code asks the two intake questions; the fixed policy or the live model picks
+    the lookups and the decision. The answers, observations, and next action
+    live only in this process.
+    """
+
+    working_memory: list[dict] = []
     answers: dict[str, str] = {}
-    questions = (
-        ("item_opened", "Was the package opened?", "Yes"),
-        ("damage", "What was damaged?", "Split seam"),
-    )
-    for question_id, question, suggested_answer in questions:
-        if question_id in answers:
+    for _turn in range(MAX_TURNS):
+        step = decide_next_step(request, working_memory, agent=USAGE_AGENT_NAIVE)
+        if step.action == "decide":
+            recommendation = step.recommendation or "escalate"
+            _line("MODEL REASONING", f"decide -> {recommendation} ({step.rationale})")
+            # Demo 2's stage runner approves an escalation, so this loop treats
+            # one the same way; only a denial leaves no refund to issue.
+            _loop_event(
+                {
+                    "kind": "ready",
+                    "label": "Next action",
+                    "result": "no refund"
+                    if recommendation == "deny"
+                    else "issue refund",
+                    "recommendation": recommendation,
+                }
+            )
+            return step
+        if step.action == "ask_customer":
+            question_id = step.question_id or ""
+            if question_id not in {"item_opened", "damage"}:
+                raise RuntimeError(
+                    f"agent asked an unsupported question: {question_id}"
+                )
+            if question_id not in answers:
+                question = step.question or question_id
+                suggested_answer = step.suggested_answer or ""
+                _loop_event(
+                    {
+                        "kind": "question",
+                        "question_id": question_id,
+                        "question": question,
+                        "suggested_answer": suggested_answer,
+                    }
+                )
+                answer = sys.stdin.readline()
+                if not answer:
+                    raise RuntimeError("customer input closed during the agent loop")
+                answers[question_id] = answer.strip() or suggested_answer
+                _loop_event(
+                    {
+                        "kind": "answer",
+                        "question_id": question_id,
+                        "question": question,
+                        "result": answers[question_id],
+                    }
+                )
+            # As in the Workflow, a repeated question reuses the earlier answer.
+            working_memory.append(
+                {
+                    "tool": "customer_answer",
+                    "result": {
+                        "question_id": question_id,
+                        "answer": answers[question_id],
+                    },
+                }
+            )
             continue
-        _loop_event(
-            {
-                "kind": "question",
-                "question_id": question_id,
-                "question": question,
-                "suggested_answer": suggested_answer,
-            }
-        )
-        answer = sys.stdin.readline()
-        if not answer:
-            raise RuntimeError("customer input closed during the agent loop")
-        answers[question_id] = answer.strip() or suggested_answer
-        _loop_event(
-            {
-                "kind": "answer",
-                "question_id": question_id,
-                "question": question,
-                "result": answers[question_id],
-            }
-        )
-
-    _loop_event(
-        {
-            "kind": "tool",
-            "tool": "lookup_order",
-            "label": "Found order",
-            "result": "python plushy",
-        }
-    )
-    _loop_event(
-        {
-            "kind": "tool",
-            "tool": "lookup_customer_history",
-            "label": "Checked refund history",
-            "result": "clean",
-        }
-    )
-    _loop_event(
-        {
-            "kind": "ready",
-            "label": "Next action",
-            "result": "issue refund",
-        }
-    )
+        result = _lookup(step.tool, request)
+        working_memory.append({"tool": step.tool, "result": result})
+        _loop_event(_tool_event(str(step.tool), result))
+    raise RuntimeError("agent did not reach a decision within the turn budget")
 
 
 def _replacement_status(args: argparse.Namespace) -> None:
@@ -250,13 +334,24 @@ def _refund(args: argparse.Namespace) -> None:
         )
         return
 
+    decision: AgentStep | None = None
     if args.interactive_loop:
-        _run_interactive_agent_loop()
+        try:
+            decision = _run_interactive_agent_loop(_naive_request(args))
+        except Exception as error:
+            # One readable line for the stage instead of a traceback it ignores.
+            _line("AGENT ERROR", json.dumps({"message": str(error)}))
+            sys.stdout.flush()
+            sys.exit(1)
     else:
         _line(
             "RETURN FORM",
             f"opened={args.opened}; damage={args.damage}; refund_to={args.refund_to}",
         )
+    if decision is not None and decision.recommendation == "deny":
+        # Nothing to hold before: a denial issues no refund.
+        _line("THE SYSTEM", f"no refund issued for order {order}")
+        return
     if args.hold_before_effect:
         _line(
             "REQUEST BUFFER",
@@ -266,7 +361,8 @@ def _refund(args: argparse.Namespace) -> None:
         while True:
             time.sleep(60)
 
-    _line("MODEL REASONING", "approve (amount within policy, clean history)")
+    if decision is None:
+        _line("MODEL REASONING", "approve (amount within policy, clean history)")
     refund_id = _append_refund(order, amount)
     _line("THE SYSTEM", f"issued refund {refund_id} for order {order}")
 
@@ -340,12 +436,12 @@ def _process_interactive(
         {"kind": "answer", "question_id": "damage", "result": "Split seam"},
         {
             "kind": "tool",
-            "label": "Found order",
+            "label": "Order",
             "result": "python plushy",
         },
         {
             "kind": "tool",
-            "label": "Checked refund history",
+            "label": "Refund history",
             "result": "clean",
         },
         {"kind": "ready", "label": "Next action", "result": "issue refund"},
@@ -569,7 +665,26 @@ def main() -> None:
     refund.add_argument(
         "--interactive-loop",
         action="store_true",
-        help="let the agent choose and ask each return question",
+        help="run the agent loop: ask each return question, then let the agent "
+        "choose the lookups and the decision",
+    )
+    refund.add_argument("--reason", default="Please refund order 1234.")
+    refund.add_argument("--payment-intent", default="pi_dry_run_demo")
+    refund.add_argument(
+        "--real",
+        action="store_true",
+        help="mark the request as Stripe test mode, as Demo 2's is; this "
+        "process never calls Stripe",
+    )
+    refund.add_argument(
+        "--real-model",
+        action="store_true",
+        help="decide with the live model instead of the fixed policy",
+    )
+    refund.add_argument(
+        "--model-provider",
+        choices=("anthropic", "openai"),
+        help="live provider for --real-model",
     )
     boundary = refund.add_mutually_exclusive_group()
     boundary.add_argument(

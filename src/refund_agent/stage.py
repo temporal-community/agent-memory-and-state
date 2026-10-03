@@ -101,8 +101,8 @@ def _closing(refund_status: str = "succeeded") -> Group:
     return Group(
         Panel(result, title="The difference", border_style="green"),
         Panel(
-            "Memory helps the agent decide.\n"
-            "Temporal records where the work stands.\n"
+            "Memory helps reasoning continue.\n"
+            "Temporal helps the operation continue.\n"
             "Stripe knows whether money moved.",
             border_style="white",
         ),
@@ -375,22 +375,40 @@ def _start_naive_at_boundary(
     stage_state: Path,
     *,
     amount_cents: int,
+    payment_intent: str = "pi_dry_run_demo",
+    reason: str = _DEFAULT_REFUND_REQUEST,
+    real: bool = False,
+    real_model: bool = False,
+    model_provider: str | None = None,
 ) -> subprocess.Popen[str]:
+    """Start Demo 1's agent process with the same request Demo 2 will get."""
+
     environment = os.environ.copy()
     environment["DEMO_STATE_DIR"] = str(stage_state)
+    command = [
+        sys.executable,
+        "-m",
+        "refund_agent.naive_refund",
+        "refund",
+        "--order",
+        "1234",
+        "--amount-cents",
+        str(amount_cents),
+        "--payment-intent",
+        payment_intent,
+        # One token, so request text that starts with "-" is not read as a flag.
+        f"--reason={reason}",
+        "--interactive-loop",
+        "--hold-before-effect",
+    ]
+    if real:
+        command.append("--real")
+    if real_model:
+        command.append("--real-model")
+        if model_provider:
+            command.extend(["--model-provider", model_provider])
     return subprocess.Popen(
-        [
-            sys.executable,
-            "-m",
-            "refund_agent.naive_refund",
-            "refund",
-            "--order",
-            "1234",
-            "--amount-cents",
-            str(amount_cents),
-            "--interactive-loop",
-            "--hold-before-effect",
-        ],
+        command,
         env=environment,
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
@@ -444,8 +462,9 @@ def _stop_naive_worker(process: subprocess.Popen[str] | None) -> None:
 
 
 async def _read_naive_loop_event(
-    process: subprocess.Popen[str], *, timeout: float = 10
+    process: subprocess.Popen[str], *, timeout: float = 60
 ) -> dict[str, str]:
+    # A live model turn can take seconds; its client times out at 45 s.
     if process.stdout is None:
         raise RuntimeError("naive Worker output is unavailable")
 
@@ -455,8 +474,13 @@ async def _read_naive_loop_event(
             if not line:
                 raise RuntimeError("naive Worker exited during the agent loop")
             label, separator, payload = line.partition("|")
-            if separator and label.strip() == "AGENT STEP":
+            if not separator:
+                continue
+            if label.strip() == "AGENT STEP":
                 return json.loads(payload)
+            if label.strip() == "AGENT ERROR":
+                message = json.loads(payload).get("message", "unknown error")
+                raise RuntimeError(f"the Demo 1 agent process failed: {message}")
 
     try:
         return await asyncio.wait_for(read_event(), timeout=timeout)
@@ -562,7 +586,9 @@ async def _drive_naive_loop(
         "user_message": request_text,
     }
     while True:
-        event = await _read_naive_loop_event(process)
+        # With --real-model the agent spends a few seconds per model turn.
+        with console.status("The agent is choosing its next step..."):
+            event = await _read_naive_loop_event(process)
         kind = event.get("kind")
         if kind == "question":
             console.clear()
@@ -584,6 +610,12 @@ async def _drive_naive_loop(
             if kind == "answer":
                 answers[event["question_id"]] = event["result"]
         elif kind == "ready":
+            if event.get("recommendation") == "deny":
+                # No refund to stop before Stripe, so Demo 1 has no story.
+                raise RuntimeError(
+                    "the model denied the Demo 1 refund; run the stage again "
+                    "(after a --real take, reconcile with: uv run refund-demo cleanup)"
+                )
             steps.append(event)
             return steps, answers
 
@@ -607,7 +639,7 @@ def _loop_steps_from_progress(progress: dict) -> list[dict[str, str]]:
                 {
                     "kind": "tool",
                     "tool": tool,
-                    "label": "Found order",
+                    "label": "Order",
                     "result": str(result.get("item") or "python plushy"),
                 }
             )
@@ -616,7 +648,7 @@ def _loop_steps_from_progress(progress: dict) -> list[dict[str, str]]:
                 {
                     "kind": "tool",
                     "tool": tool,
-                    "label": "Checked refund history",
+                    "label": "Refund history",
                     "result": "clean",
                 }
             )
@@ -625,7 +657,7 @@ def _loop_steps_from_progress(progress: dict) -> list[dict[str, str]]:
                 {
                     "kind": "tool",
                     "tool": tool,
-                    "label": "Checked refund policy",
+                    "label": "Refund policy",
                     "result": "eligible"
                     if result.get("eligible_for_refund")
                     else "not eligible",
@@ -847,6 +879,11 @@ async def run(
         naive_worker = _start_naive_at_boundary(
             stage_state,
             amount_cents=amount_cents,
+            payment_intent=payment_intent,
+            reason=naive_request,
+            real=real,
+            real_model=real_model,
+            model_provider=selected_provider,
         )
         naive_steps, customer_answers = await _drive_naive_loop(
             console,

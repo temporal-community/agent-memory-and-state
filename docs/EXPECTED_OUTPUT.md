@@ -2,7 +2,8 @@
 
 Back to the [README](../README.md). The README's
 [What you should see](../README.md#what-you-should-see) lists the key lines;
-this page has the full condensed transcript and the Worker log.
+this page has the full condensed transcript, what changes with a live model,
+and the Worker log.
 
 ## Stage transcript
 
@@ -34,8 +35,8 @@ agent> What was damaged? [Split seam]
   AGENT LOOP
     ✓ Package opened: Yes
     ✓ Damage: Split seam
-    ✓ Found order: python plushy
-    ✓ Checked refund history: clean
+    ✓ Order: python plushy (memory)
+    ✓ Refund history: clean (memory)
     → Next: issue refund
   WORK NOT SAVED
     Next step: submit the refund.
@@ -75,8 +76,8 @@ Reusing your Demo 1 answers so you don't type them twice...
   TEMPORAL WORKER  AGENT LOOP
                      ✓ Package opened: Yes
                      ✓ Damage: Split seam
-                     ✓ Found order: python plushy
-                     ✓ Checked refund history: clean
+                     ✓ Order: python plushy (memory)
+                     ✓ Refund history: clean (memory)
                      → Next: issue refund
   WHAT SURVIVES    TEMPORAL        Saved so far:
                                    Customer answers: 2
@@ -114,23 +115,56 @@ Press Enter for the takeaway
 The difference
   Without Temporal: the customer had to start over.
   With Temporal: a new Worker picked up at the saved next action.
-Memory helps the agent decide.
-Temporal records where the work stands.
+Memory helps reasoning continue.
+Temporal helps the operation continue.
 Stripe knows whether money moved.
 Stage logs: .demo-state/stage-<token>
 ```
 
 With `--real`, the ledger heading reads `STRIPE (test mode)` and the header
-lines end in `Stripe test mode`. With `--real-model`, the Demo 2 header starts
-with `Live model (anthropic)` or `Live model (openai)` instead of
-`Fixed policy (no LLM)`. The `Stage logs:` path is relative to the directory
-you ran the stage from, so it works as `refund-demo usage --state-dir` from
-there.
+lines end in `Stripe test mode`. The `Stage logs:` path is relative to the
+directory you ran the stage from, so it works as `refund-demo usage --state-dir`
+from there.
 
 The durable `WORKER GONE` frame can take up to 3 seconds to appear, because it
 reads Event History while it draws. If that read fails or runs out of time, the
 pane says `Could not re-read Temporal.` and `Showing the earlier reading:`
 instead of `Read from Temporal just now:`.
+
+## With a live model
+
+`stage --real-model --model-provider openai` (or `anthropic`) runs both demos
+on the live model, through the same decision step. Compared with the default
+transcript:
+
+- Both demo headers start with `Live model (openai)` or
+  `Live model (anthropic)`, instead of `Scripted steps` in Demo 1 and
+  `Fixed policy (no LLM)` in Demo 2. With `--real`, both read
+  `Live model (openai) · sample lookups · Stripe test mode`.
+- While Demo 1 waits on the model, the screen shows
+  `The agent is choosing its next step...`.
+- The model picks the lookups. In the measured 2026-10-02 take it also checked
+  the policy in both demos, so each loop adds
+  `✓ Refund policy: eligible (memory)`, and Demo 2's pane shows
+  `Completed lookups: 3`.
+- The model sees the order amount as `"$80.00"`, never cents, so its rationale
+  speaks in dollars.
+- The new Demo 1 process still says "No refund request reached Stripe. I lost
+  your return answers. Please start the return again." That reply is fixed
+  text, not model output.
+- If the model denies the Demo 1 request, the stage stops before Demo 2 with
+  `STAGE | the model denied the Demo 1 refund; run the stage again`, plus a
+  cleanup hint for a `--real` take. A Demo 2 denial shows the model's rationale
+  and that no refund was issued.
+- If Demo 1's process fails, for example on a missing key or an API error, the
+  stage stops with `STAGE | the Demo 1 agent process failed: <reason>`. Demo 1
+  has no retry layer, so one failed model call ends it.
+
+In Temporal Web, each Activity row carries a plain-words summary:
+`Agent turn N: decide the next step`, `Look up order 1234`,
+`Look up the customer's refund history`, `Check the refund policy`, and
+`Issue the refund in Stripe` (also offline, where the ledger stands in for
+Stripe). See [Temporal Web](TEMPORAL_WEB.md#what-to-check-at-each-frame).
 
 ## Worker log
 
@@ -161,3 +195,21 @@ The second `Worker connected` line is the new Worker. No
 `agent_decide_next_step` or lookup output follows it, because replay reads
 those results from Event History instead of running them again. In the default
 mode, "at Stripe" means the offline ledger.
+
+With `--real-model`, the `MODEL REASONING` lines are the model's choices. From
+the measured 2026-10-02 take, condensed:
+
+```text
+MODEL REASONING | turn 3: plan -> call lookup_order
+EXECUTION STATE | phase=observed tool=lookup_order
+MODEL REASONING | turn 4: plan -> call lookup_customer_history
+EXECUTION STATE | phase=observed tool=lookup_customer_history
+MODEL REASONING | turn 5: plan -> call check_refund_policy
+EXECUTION STATE | phase=observed tool=check_refund_policy
+MODEL REASONING | turn 6: decide -> approve (Approve the $80.00 refund for order-1234. ...)
+EXECUTION STATE | phase=decided recommendation=approve
+```
+
+Turns 1 and 2 are the intake questions, which code asks without a model call.
+With `LOG_MODEL_USAGE=1`, each model call also logs a `MODEL USAGE` line with
+its input and output tokens.

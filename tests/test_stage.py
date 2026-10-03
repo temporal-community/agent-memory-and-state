@@ -1,7 +1,10 @@
+import argparse
 import asyncio
+import contextlib
 import io
 import json
 import os
+from dataclasses import asdict
 from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -31,6 +34,7 @@ from refund_agent.stage import (
     _live_model_provider,
     _loop_steps_from_progress,
     _naive_ledger,
+    _read_naive_loop_event,
     _roles,
     _Services,
     _start_naive_at_boundary,
@@ -71,6 +75,9 @@ class _FakeConsole:
 
     def print(self, _renderable) -> None:
         pass
+
+    def status(self, _message: str) -> contextlib.nullcontext:
+        return contextlib.nullcontext()
 
 
 class _FakeWorkflowHandle:
@@ -217,8 +224,8 @@ def test_stage_closing_states_the_observable_outcome() -> None:
     assert "No repeated questions" not in panels[0].renderable.plain
     assert "One submitted request, one refund" not in panels[0].renderable.plain
     assert panels[1].renderable.splitlines() == [
-        "Memory helps the agent decide.",
-        "Temporal records where the work stands.",
+        "Memory helps reasoning continue.",
+        "Temporal helps the operation continue.",
         "Stripe knows whether money moved.",
     ]
 
@@ -245,8 +252,8 @@ def test_worker_gone_frame_shows_the_loop_read_from_temporal_just_now(
         return [
             {"kind": "answer", "question_id": "item_opened", "result": "Yes"},
             {"kind": "answer", "question_id": "damage", "result": "Split seam"},
-            {"kind": "tool", "label": "Found order", "result": "done"},
-            {"kind": "tool", "label": "Checked refund history", "result": "done"},
+            {"kind": "tool", "label": "Order", "result": "done"},
+            {"kind": "tool", "label": "Refund history", "result": "done"},
             {"kind": "ready", "label": "Next action", "result": "issue refund"},
         ]
 
@@ -658,3 +665,236 @@ def test_history_phase_says_recorded_once_the_refund_step_completes() -> None:
     rows.append({"event": "completed", "name": "issue_refund"})
     assert _phase(rows, "RUNNING") == "refund recorded"
     assert _phase(rows, "COMPLETED") == "completed"
+
+
+class _ScriptedOpenAI:
+    """A fake OpenAI client that answers each model turn from a script."""
+
+    def __init__(self, calls: list[tuple[str, str]], sent: list[dict]) -> None:
+        self._calls = iter(calls)
+        self._sent = sent
+        self.responses = self
+
+    def create(self, **kwargs):
+        self._sent.append(kwargs)
+        name, arguments = next(self._calls)
+        call = SimpleNamespace(type="function_call", name=name, arguments=arguments)
+        usage = SimpleNamespace(input_tokens=1000, output_tokens=50)
+        return SimpleNamespace(output=[call], usage=usage)
+
+
+def _naive_args(**changes) -> argparse.Namespace:
+    values = {
+        "order": "1234",
+        "amount_cents": 8000,
+        "payment_intent": "pi_test",
+        "reason": "Please refund order 1234.",
+        "real": True,
+        "real_model": True,
+        "model_provider": "openai",
+        "hold_before_effect": True,
+    }
+    return argparse.Namespace(**{**values, **changes})
+
+
+def test_demo_one_live_loop_runs_the_shared_model_step(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    from refund_agent import activities, naive_refund
+
+    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("LOG_MODEL_USAGE", "1")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("OPENAI_MODEL", "gpt-5.6-luna")
+    sent: list[dict] = []
+    client = _ScriptedOpenAI(
+        [
+            ("lookup_order", '{"order_id": "order-1234"}'),
+            ("lookup_customer_history", '{"customer_id": "cus_demo_42"}'),
+            (
+                "submit_decision",
+                '{"recommendation": "approve", "rationale": "A clean $80.00 refund."}',
+            ),
+        ],
+        sent,
+    )
+    monkeypatch.setattr(activities, "OpenAI", lambda **_kw: client)
+    monkeypatch.setattr("sys.stdin", io.StringIO("\ntorn wing\n"))
+
+    decision = naive_refund._run_interactive_agent_loop(
+        naive_refund._naive_request(_naive_args())
+    )
+
+    events = [
+        json.loads(line.partition("|")[2])
+        for line in capsys.readouterr().out.splitlines()
+        if line.startswith("AGENT STEP")
+    ]
+    assert [event["kind"] for event in events] == [
+        "question",
+        "answer",
+        "question",
+        "answer",
+        "tool",
+        "tool",
+        "ready",
+    ]
+    assert (events[1]["result"], events[3]["result"]) == ("Yes", "torn wing")
+    assert events[-1]["result"] == "issue refund"
+    assert decision.source == "openai:gpt-5.6-luna"
+    # Code asked the two questions; the model chose the lookups and decision.
+    assert len(sent) == 3
+    final_prompt = json.loads(sent[-1]["input"])
+    assert [obs["tool"] for obs in final_prompt["observations"]] == [
+        "customer_answer",
+        "customer_answer",
+        "lookup_order",
+        "lookup_customer_history",
+    ]
+    assert final_prompt["request"]["amount"] == "$80.00"
+    log = (tmp_path / "model-usage.jsonl").read_text().splitlines()
+    assert [json.loads(line)["agent"] for line in log] == ["naive"] * 3
+
+
+def test_demo_one_gets_the_request_demo_two_gets() -> None:
+    from refund_agent.naive_refund import _naive_request
+
+    naive = _naive_request(_naive_args())
+    durable = _durable_request(
+        workflow_id="talk-refund-test",
+        payment_intent="pi_test",
+        amount_cents=8000,
+        reason="Please refund order 1234.",
+        real=True,
+        real_model=True,
+        model_provider="openai",
+        simulate_stripe_retry=False,
+        simulate_stripe_timeout=False,
+    )
+
+    # Only the id and the Worker-loss heartbeat setting differ.
+    temporal_only = {"request_id", "fast_recovery"}
+    assert {
+        key: value for key, value in asdict(naive).items() if key not in temporal_only
+    } == {
+        key: value for key, value in asdict(durable).items() if key not in temporal_only
+    }
+
+
+def test_stage_starts_demo_one_on_the_selected_model(tmp_path, monkeypatch) -> None:
+    launched: dict = {}
+
+    def fake_popen(command, **kwargs):
+        launched["command"] = command
+        launched["env"] = kwargs["env"]
+        return _FakeProcess()
+
+    monkeypatch.setattr("refund_agent.stage.subprocess.Popen", fake_popen)
+
+    _start_naive_at_boundary(
+        tmp_path,
+        amount_cents=8000,
+        payment_intent="pi_test",
+        reason="refund my plushy",
+        real=True,
+        real_model=True,
+        model_provider="openai",
+    )
+    command = launched["command"]
+
+    assert command[command.index("--payment-intent") + 1] == "pi_test"
+    assert "--reason=refund my plushy" in command
+    assert command[command.index("--model-provider") + 1] == "openai"
+    assert {"--real", "--real-model", "--hold-before-effect"} <= set(command)
+    assert launched["env"]["DEMO_STATE_DIR"] == str(tmp_path)
+
+    _start_naive_at_boundary(tmp_path, amount_cents=8000)
+
+    assert not {"--real", "--real-model", "--model-provider"} & set(launched["command"])
+
+
+def test_demo_one_accepts_request_text_that_starts_with_a_dash(tmp_path) -> None:
+    # One dash-led word: argparse reads it as a flag unless it is joined
+    # to --reason.
+    process = _start_naive_at_boundary(tmp_path, amount_cents=8000, reason="--refund")
+    try:
+        event = asyncio.run(_read_naive_loop_event(process))
+    finally:
+        _stop_naive_worker(process)
+
+    assert event["kind"] == "question"
+
+
+def test_demo_one_real_model_without_a_provider_fails(monkeypatch) -> None:
+    from refund_agent.naive_refund import _naive_request
+
+    for name in ("AGENT_MODEL_PROVIDER", "OPENAI_API_KEY", "ANTHROPIC_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+
+    # Offline (no --real), this used to fall back to the fixed policy silently.
+    with pytest.raises(RuntimeError, match="--real-model requires"):
+        _naive_request(_naive_args(real=False, model_provider=None))
+
+
+def test_demo_one_denial_returns_instead_of_holding(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    from refund_agent import naive_refund
+    from refund_agent.models import AgentStep
+
+    monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
+    deny = AgentStep(action="decide", recommendation="deny", rationale="ineligible")
+    monkeypatch.setattr(
+        naive_refund, "_run_interactive_agent_loop", lambda _request: deny
+    )
+
+    def no_hold(_seconds):
+        raise AssertionError("a denial must not wait before an effect")
+
+    monkeypatch.setattr(naive_refund.time, "sleep", no_hold)
+
+    naive_refund._refund(
+        _naive_args(
+            interactive_loop=True,
+            hold_after_effect=False,
+            real=False,
+            model_provider="openai",
+        )
+    )
+
+    out = capsys.readouterr().out
+    assert "no refund issued for order 1234" in out
+    assert "REQUEST BUFFER" not in out
+    assert not (tmp_path / "naive-ledger.json").exists()
+
+
+def test_stage_reports_why_the_demo_one_agent_failed() -> None:
+    process = SimpleNamespace(
+        stdout=io.StringIO(
+            "MEMORY COPY | lookup_order: python plushy\n"
+            'AGENT ERROR    | {"message": "OPENAI_MODEL is required"}\n'
+        )
+    )
+
+    with pytest.raises(RuntimeError, match="OPENAI_MODEL is required"):
+        asyncio.run(_read_naive_loop_event(process, timeout=1))
+
+
+def test_stage_stops_when_the_model_denies_demo_one() -> None:
+    ready = {
+        "kind": "ready",
+        "label": "Next action",
+        "result": "no refund",
+        "recommendation": "deny",
+    }
+    process = SimpleNamespace(
+        stdin=io.StringIO(),
+        stdout=io.StringIO(f"AGENT STEP     | {json.dumps(ready)}\n"),
+    )
+
+    with pytest.raises(RuntimeError, match="denied the Demo 1 refund"):
+        asyncio.run(
+            _drive_naive_loop(
+                _FakeConsole(), process, request_text="refund", amount_cents=8000
+            )
+        )
