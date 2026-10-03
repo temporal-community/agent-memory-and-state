@@ -64,7 +64,10 @@ Prices are list prices, checked on 2026-09-29:
     calls, 2,623 input and 349 output tokens (97 reasoning), 2,972 tokens,
     $0.0009.
 
-  All three at the 2026-09-29 list prices. The model sees amounts as dollars
+  All three at the 2026-09-29 list prices. At scale, as an estimate: an agent
+  serving 1M requests a month at this pass size uses about 3B tokens
+  (2,962 × 1M) and about $900 in model calls (1M × $0.0009), and every request
+  that starts over pays its share again. The model sees amounts as dollars
   (`"$80.00"`), never cents. An earlier pass, on 2026-09-30, before Demo 1
   used the model and while prompts still showed cents, made the same 4 calls
   in Demo 2 (2,845 tokens, $0.0009).

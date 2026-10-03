@@ -11,7 +11,7 @@
 </div>
 
 This repo shows what memory and execution state each do for an AI agent, and
-Temporal's role: it keep track of the execution state happening outside the agent's process. The
+Temporal's role: it keeps track of the execution state outside the agent's process. The
 agent is a plain Python loop with no agent framework, so the boundary between
 the two stays visible.
 
@@ -437,6 +437,11 @@ the 4 recorded model turns from Event History and made 0 model calls,
 measured. A model call still running when a Worker dies is different: it runs
 again after its 60-second Activity timeout and can be billed again. On the
 stage path the kill lands after the last model call, so no call is in flight.
+
+**At scale (estimate).** An agent serving 1M requests a month at this pass
+size uses about 3B tokens (2,962 × 1M) and about $900 in model calls
+(1M × $0.0009, list prices as of 2026-09-29). Every request that starts over
+pays its share again.
 
 The offline rehearsal (`uv run refund-demo stage`) and the `--real` run use a
 fixed policy in both demos: 0 model calls, 0 tokens, $0.
