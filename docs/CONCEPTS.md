@@ -32,11 +32,17 @@ Memory appears at two timescales:
 - **Working memory** is what the model works with this turn. The context window
   holds it; context management selects and refreshes it.
 - **Long-term memory** carries knowledge across sessions. It may be episodic,
-  describing what happened, or semantic, describing facts as the agent recalls
-  them.
+  describing what happened; semantic, describing facts as the agent recalls
+  them; or procedural, describing how to do things, such as skill files and
+  tool definitions.
 
 Both forms can be durable. Durability alone does not make them authoritative
 about a fact owned elsewhere.
+
+The model also has parametric memory: what it learned in training. It lives in
+the weights, so you can't see or edit it while the agent runs; only retraining
+or fine-tuning changes it. When the weights and a record disagree, the record
+wins.
 
 ### Can domain state also be memory?
 

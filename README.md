@@ -120,7 +120,7 @@ inside the loop. Long-term memory and state live outside it.
 | | What it helps with | In this demo | Where to find it |
 | --- | --- | --- | --- |
 | **Context** (working memory) | What the model sees for this one decision. The loop sends it again on every turn | The refund request, the customer's two answers, and the lookups so far: order 1234 and the refund history of the demo customer, Nyghtowl | `working_memory`: a list in the naive agent's process (`naive_refund.py`), or a Workflow field (`workflow.py`) that replay rebuilds. It is the input of each `agent_decide_next_step` Activity in Event History |
-| **Long-term memory** (a memory store) | What the agent carries across runs: past cases, lessons, notes it wrote | None, on purpose. On screen, lookups are tagged `(memory)` because they stand in for retrieval, but they read fixture records, and nothing is saved across runs | Your store: a vector store, a knowledge base, or memory files |
+| **Long-term memory** (a memory store) | What the agent carries across runs: past cases (episodic), facts it looks up (semantic), and how-to such as skill files (procedural) | None, on purpose. On screen, lookups are tagged `(memory)` because they stand in for retrieval, but they read fixture records, and nothing is saved across runs | Your store: a vector store, a knowledge base, or memory files |
 | **Execution state** | Where the work stands: which steps finished and what runs next, so the work can continue after a crash without redoing it | 2 answers, 2 lookups (3 when a live model also checks the refund policy), next action `issue refund` | Temporal: the Workflow's Event History in the Temporal UI (http://localhost:8233), or `uv run refund-demo inspect <workflow-id>` |
 | **Effect state** | Whether the side effect really happened | Whether Stripe holds a refund for the payment | Stripe: the Dashboard in test mode, where the refund carries `temporal_workflow_id` (offline: the ledger) |
 
@@ -131,21 +131,26 @@ finishes as an Activity. When the Worker dies, a new Worker replays that
 history, rebuilds the loop and `working_memory`, and continues at the next
 unfinished step without calling the finished ones again. Replay, not redo. In
 the video: "It's not redoing any of those steps it's already done. It's
-replaying them." Temporal doesn't decide what the agent does, doesn't make the
-model's answer right, and doesn't make the refund exactly once; the Stripe
-idempotency key does that.
+replaying them." Temporal doesn't decide what the agent does or make the
+model's answer right; evals and guardrails cover that. It doesn't make the
+refund exactly once either: every retry sends the same Stripe idempotency key,
+so Stripe makes one refund.
 
 **Why not just add a memory store?** A memory store could bring back the
 answers, but answers alone can't say whether the refund went out or which step
 runs next, and a store doesn't restart the run. It can hold a copy of
-execution state; the record holds the original. After a crash, only the
+execution state; the record holds the original. A memory store survives the
+crash too, so durability isn't the difference: memory says what the agent
+believed, and the record says what happened. After a crash, only the
 records answer "What's my next step?" (Temporal) and "Did I submit this
 refund?" (Stripe). A durable job table or a careful state machine can hold
 execution state too; in this demo, Temporal does.
 
 **Facts have owners.** Each owner is a system of record, and its record wins
 when a copy disagrees: Temporal for execution state, Stripe for effect state.
-A real system also has authorization state (may this agent act? Read it live
+If the agent trusts a copy instead, such as a remembered "not refunded yet", it
+can refund the same order twice. Context and memory help the agent decide;
+these two records make recovery safe. A real system also has authorization state (may this agent act? Read it live
 from your auth system before acting) and domain state (the business facts, in
 your database). For any fact, ask: does another system already own it?
 
@@ -507,15 +512,18 @@ tokens (about 4 bytes per token, uncached). This demo stops at
 
 Two fixes:
 
-- **Claim check: save a ticket, not the data.** It works like a coat check.
+- **Claim check, for a result that's too big: save a ticket, not the data.**
+  It works like a coat check.
   Your store (S3 or a database) keeps the coat; Event History keeps only the
   ticket, a small key. The ticket replaces the big value in the Activity's
   result and in the next step's input, and an Activity reads the data back
   when it needs it. The Python SDK's External Storage does this for payloads of
   256 KiB or more (S3 driver, Public Preview); lower the threshold for an agent
-  loop. A claim check shrinks the history, not the prompt.
-- **Continue-as-new: a fresh history, same Workflow.** It works like a new
-  notebook: copy over only the notes you need. At a quiet point, once
+  loop. A claim check shrinks the history, not the prompt. This demo doesn't
+  need one; an agent that pulls a customer's full order history into context
+  would.
+- **Continue-as-new, for a run that goes on and on: a fresh history, same
+  Workflow.** It works like a new notebook: copy over only the notes you need. At a quiet point, once
   `workflow.info().is_continue_as_new_suggested()` returns `True`, the Workflow
   ends this run and starts a new one with the same Workflow ID, a new Run ID,
   and an empty history. The new run gets only the input you pass it, such as
