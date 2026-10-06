@@ -65,6 +65,10 @@ the `Stage logs:` line printed at the end. The Workflow type is
    `Issue the refund in Stripe` (offline too, where the ledger stands in for
    Stripe). This is the same history the stage's
    `WORKER GONE` pane reads. Don't run a Query now: Queries need a live Worker.
+   On the Workers tab (or the task queue page), a live Worker's Last Accessed
+   time is never much more than a minute old. A killed Worker stays listed
+   until 5 minutes after its last poll, and its Last Accessed time gets older.
+   The Deployments page shows only versioned Workers, so it doesn't show this.
 3. After recovery, the Workflow is `Completed`. No `agent_decide_next_step`,
    lookup, or `customer_answer` event repeats, because the new Worker replayed
    them from history. The new application-level work is the `release` Signal
@@ -72,8 +76,11 @@ the `Stage logs:` line printed at the end. The Workflow type is
    Task events. The result's `idempotency_key` is
    `durable-refund-<sha256 of workflow_id:run_id>`. That `ActivityTaskStarted`
    event's identity is the new Worker's `<pid>@refund-demo`, with a different
-   PID from the first Worker's earlier `WorkflowTaskStarted` events. While the
-   stage's last frame is up, a `stage_progress` Query returns
+   PID from the first Worker's earlier `WorkflowTaskStarted` events. Before the
+   refund you may see a `WorkflowTaskTimedOut` event (schedule-to-start):
+   Temporal first offered the task to the killed Worker and stopped waiting
+   after 10 seconds. The next `WorkflowTaskStarted` shows the new identity.
+   While the stage's last frame is up, a `stage_progress` Query returns
    `phase: "completed"`.
 
 Every client the demo starts reports `<pid>@refund-demo` instead of the SDK

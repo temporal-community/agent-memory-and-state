@@ -65,13 +65,40 @@ and payload limits are fixed. Sources:
 (the continue-as-new suggestion), and the server's
 [dynamic config defaults](https://github.com/temporalio/temporal/blob/main/common/dynamicconfig/constants.go).
 
+## Measured in the fleet demo
+
+The companion
+[fleet demo](https://github.com/temporal-community/temporal-ai-hitl-adk-langgraph)
+ran one full pass per tab on 2026-09-30. On the Human → Agent tab, with the
+model calls inline, the parent Workflow ended at 4,947 events and 9,443,220
+bytes (9.0 MiB), about 1 MiB under the 10 MiB warning. On the Cross-Framework
+tab, with the model calls in child Workflows, the parent ended at 2,154 events
+and 408,054 bytes (0.4 MiB).
+
+The fleet rolls each driver Workflow over at 10,000 events, at a quiet point
+when the driver is idle with nothing pending
+([continue-as-new code](https://github.com/temporal-community/temporal-ai-hitl-adk-langgraph/blob/as-presented-2026-07/agent_fleet/workflows.py#L390-L414)).
+The parent has the same guard, but a pass ends before it fires. Both count
+events, not bytes. The inline parent reached 9.0 MiB at 4,947 events, so on a
+longer run it would pass the 10 MiB warning long before 10,000 events.
+
+On the Agent → Human tab, one full pass (51 orders) made 322 model calls and
+used 732,256 tokens, $1.49, on `gemini-3.8-flash` with its default (medium)
+thinking, at list prices valid through 2026-12-31. That leaves out 51 venue
+searches, also Gemini calls, whose tokens LangGraph doesn't keep. On main, the
+fleet README's
+[history note](https://github.com/temporal-community/temporal-ai-hitl-adk-langgraph/blob/main/README.md#what-this-is-not)
+gives these sizes rounded in MB, and its
+[Cost to run](https://github.com/temporal-community/temporal-ai-hitl-adk-langgraph/blob/main/README.md#cost-to-run)
+has every tab and what changes the cost.
+
 ## The ownership rule
 
 Temporal owns where the work stands: which steps finished, what the loop is
 waiting for, and what it does next. Small observations belong in Workflow
 state; they are what let the reloaded agent resume without repeating
-questions. Large records belong in a memory store, and Workflow state keeps
-only a key.
+questions. Large records belong in your own store, such as S3, and Workflow
+state keeps only a key (a claim check).
 
 ## Fix 1: claim check
 

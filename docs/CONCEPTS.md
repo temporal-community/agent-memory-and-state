@@ -8,6 +8,10 @@ ruling on whether state is a kind of memory:
 - **State** is an owner's record of progress or facts that informs and constrains
   what the application may safely do.
 
+In this demo, the model sees all of working memory each turn, so the README's
+table calls it context. On its own, "memory" usually means long-term memory in
+a store.
+
 All three can help an agent decide, and the same data can cross these
 boundaries. The useful question is not what to call the bytes, but which record
 wins when two copies disagree.
@@ -28,11 +32,17 @@ Memory appears at two timescales:
 - **Working memory** is what the model works with this turn. The context window
   holds it; context management selects and refreshes it.
 - **Long-term memory** carries knowledge across sessions. It may be episodic,
-  describing what happened, or semantic, describing facts as the agent recalls
-  them.
+  describing what happened; semantic, describing facts as the agent recalls
+  them; or procedural, describing how to do things, such as skill files and
+  tool definitions.
 
 Both forms can be durable. Durability alone does not make them authoritative
 about a fact owned elsewhere.
+
+The model also has parametric memory: what it learned in training. It lives in
+the weights, so you can't see or edit it while the agent runs; only retraining
+or fine-tuning changes it. When the weights and a record disagree, the record
+wins.
 
 ### Can domain state also be memory?
 
@@ -58,11 +68,13 @@ world, but it remains the operational source of truth.
 | --- | --- | --- |
 | **Execution state** | Where does the work stand? | Temporal |
 | **Effect state** | Did the real effect commit? | Stripe or the offline ledger |
-| **Authorization state** | May this agent act? | The authorization system |
+| **Authorization state** | May this agent act? | The authorization system (read it live) |
 | **Domain state** | What are the business facts? | The application database |
 
 An autonomous agent can cache any of these facts in context or memory. The
-cached copy does not replace the owner.
+cached copy does not replace the owner. For any fact, ask: does another system
+already own it? Asked of every fact, it finds more kinds of state than these
+four, such as token budgets, locks, and quotas.
 
 ## The uncoordinated-progress trap
 
@@ -109,9 +121,10 @@ A Temporal Workflow's execution state:
 - is eventually deleted
 
 That is neither simply ephemeral nor permanently stored. Event History is also
-bounded in size, so a long agent loop keeps large records in a memory store and
-passes only keys through the Workflow (see "When Event History grows" in the
-README). Lifespan is a configuration choice. Authority is the stable boundary:
+bounded in size, so a long agent loop keeps large records in an external store,
+such as S3, and passes only keys through the Workflow (see "When Event History
+grows" in the README). Lifespan is a configuration choice. Authority is the
+stable boundary:
 
 > When the agent's copy and the owner's record disagree, the owner's record
 > wins.
