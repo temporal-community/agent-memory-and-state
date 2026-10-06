@@ -1,15 +1,22 @@
 # Expected output
 
-Back to the [README](../README.md). The README's
-[What you should see](../README.md#what-you-should-see) lists the key lines;
-this page has the full condensed transcript, what changes with a live model,
-and the Worker log.
+Back to the [README](../README.md). This page has the full condensed stage
+transcript, the pane text when the history read fails, what changes with a
+live model, and the Worker log that shows the resume.
 
 ## Stage transcript
 
 Default run: `uv run refund-demo stage --workflow-id nyghtowl-take-01`,
 pressing Enter at every prompt. The frames below are condensed, with the box
 drawing removed. Pane titles are in capitals.
+
+To check a run quickly, look for these lines in order.
+
+- Demo 1: `→ Next: issue refund`, `PROCESS GONE`, then
+  `No refund request reached Stripe.` and `Please start the return again.`
+- Demo 2: `WORKER GONE`, `Read from Temporal just now:` with
+  `Next action: issue refund`, then `NO REPEATED QUESTIONS`,
+  `NO LOOP RESTART`, and `Your refund is complete.`
 
 ```text
 Agent memory and state

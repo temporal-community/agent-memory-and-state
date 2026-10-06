@@ -1,16 +1,20 @@
 # Troubleshooting
 
-Back to the [README](../README.md). The README lists the five most likely
-errors; this is the full table.
+Back to the [README](../README.md).
 
 Stage errors are printed as `STAGE | <message>`. Workflow and Activity failures
 show up in Temporal Web and in `.demo-state/stage-<token>/worker.log`.
+
+The five most likely errors are Temporal not reachable, the dev server or the
+Worker exiting while starting, the missing Rich extra, and
+`WorkflowAlreadyStartedError`. The full table below also covers configuration,
+live-model, Stripe, timeout, usage-log, and Temporal Web errors.
 
 | You see | Cause | Fix |
 | --- | --- | --- |
 | ``STAGE \| Temporal is not reachable and the `temporal` CLI is not on PATH`` | Nothing answers at `TEMPORAL_ADDRESS`, and the stage can't start a server | Install the Temporal CLI, or run `temporal server start-dev` first |
 | `STAGE \| could not connect to configured Temporal service <address>` | `TEMPORAL_ADDRESS` names a non-local host that isn't answering. The stage won't silently fall back to localhost | Fix or unset `TEMPORAL_ADDRESS` |
-| `STAGE \| Temporal dev server exited while starting:` plus a log tail | Usually port 7233 or 8233 is already in use | Run `lsof -nP -iTCP:7233 -iTCP:8233 -sTCP:LISTEN`, then use the port variant in [Watch it in Temporal Web](TEMPORAL_WEB.md) |
+| `STAGE \| Temporal dev server exited while starting:` plus a log tail | Usually port 7233 or 8233 is already in use | Run `lsof -nP -iTCP:7233 -iTCP:8233 -sTCP:LISTEN`, then use the port variant in [Start your own dev server](TEMPORAL_WEB.md#start-your-own-dev-server) |
 | `STAGE \| Temporal dev server did not become ready` | The started server didn't answer within 20 s. This also happens when `TEMPORAL_ADDRESS` uses a localhost port other than 7233, because the stage starts its server without `--port` | Start the server yourself on the port you configured, or unset `TEMPORAL_ADDRESS` |
 | `STAGE \| Worker exited while starting:` plus a log tail | The Worker crashed at startup. A common cause is a live or malformed `STRIPE_API_KEY` in `.env`, which the Worker rejects even in offline mode | Read the tail. Use a `sk_test_` or `rk_test_` key, or remove the key |
 | `STAGE \| both live-model keys are configured; choose --model-provider` | Both model keys are set and `AGENT_MODEL_PROVIDER` is blank | Add `--model-provider anthropic` or `--model-provider openai` |

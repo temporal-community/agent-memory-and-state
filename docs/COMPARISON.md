@@ -1,11 +1,31 @@
 # How other products approach it
 
-Back to the [README](../README.md#how-other-products-approach-it).
+Back to the [README](../README.md).
 
 Most of the products below are memory products (what the agent knows) or
 transcript stores. Several also ship execution state for their own runtime.
-This demo is about that execution-state layer, with no framework. Each row is
-scoped to the linked pages as read on 2026-09-29.
+This demo is about that execution-state layer, with no framework.
+
+## Four approaches
+
+| Kind | Examples | After a crash |
+| --- | --- | --- |
+| Memory layers and transcript stores | Mem0, Letta, Anthropic memory tool, OpenAI Agents SDK Sessions | Restore what the agent knows; a new process decides again |
+| Execution state inside one agent runtime | LangGraph checkpointers, LangSmith Deployment, OpenAI Agents SDK `RunState`, Google ADK Resume | Resume within that runtime; some re-run a step, so effects still need idempotency keys |
+| Execution state you build | Postgres job table with a recovery point | A completer process you write |
+| Durable execution, not tied to an agent framework | Temporal (this demo), DBOS | Resume from recorded steps: any Temporal Worker polling the task queue, or the DBOS app from its last completed step |
+
+One line to remember: persisted chat history lets a new process decide again.
+Durable execution resumes the decision the agent already made. And Stripe, not
+either of them, says whether money moved.
+
+A checkpoint recovers position, not a call that already went out. A step that
+was running at the crash runs again, in a LangGraph checkpointer and in
+Temporal, so a side effect needs an idempotency key.
+
+## Product by product
+
+Each row is scoped to the linked pages as read on 2026-09-29.
 
 | Product and feature | What it keeps | Who resumes after a crash | Compared with this demo |
 | --- | --- | --- | --- |
@@ -20,12 +40,10 @@ scoped to the linked pages as read on 2026-09-29.
 | [DBOS](https://docs.dbos.dev/integrations/openai-agents) | Checkpointed steps in Postgres or SQLite | The app resumes from the last completed step | The same category as Temporal. DBOS runs as a library in your app, with no separate orchestration server. |
 | Temporal (this demo) | Event History of Signals and Activity inputs and results; Workflow fields rebuilt by replay | Any Worker polling the task queue | Framework-agnostic, with per-Activity retry and heartbeat policies, durable waits, and a history UI. The costs: you run a service, Workflow code must be deterministic and versioned, and history is bounded. |
 
-One line to remember: persisted chat history lets a new process decide again.
-Durable execution resumes the decision the agent already made. And Stripe, not
-either of them, says whether money moved.
-
 ## When you don't need Temporal
 
+- **The loop is short and the user is right there.** Losing a run only means
+  asking again.
 - **Only the conversation matters.** If there is no irreversible side effect, a
   session store is enough.
 - **You need personalization.** That is a memory problem.

@@ -1,10 +1,41 @@
 # Architecture and code tour
 
-Back to the [README](../README.md). This page holds the long description of
-the diagram in [How it works](../README.md#how-it-works), the full loop sketch,
-every command entry point, the repository map, and the test commands.
+Back to the [README](../README.md). This page holds the wiring diagram and its
+walkthrough, the full loop sketch, how retries work, every command entry point,
+the repository map, and the test commands.
 
 ## How the stage is wired
+
+```mermaid
+flowchart LR
+    accTitle: How the guided stage demo is wired
+    accDescr: The refund-demo stage command drives both demos. Demo 1 is a naive agent process that runs the same decision step with no Temporal and keeps its answers in memory, and after it is killed a new process only reads the effect owner. Demo 2 starts a Temporal Workflow on a local dev server. A separate Worker process polls a private task queue on that server and runs the Workflow loop and its Activities. The stage kills that Worker and starts a replacement, which replays Event History to rebuild the loop and then issues one refund to the offline effect ledger, or to Stripe test mode with --real.
+    stage["refund-demo stage<br/>stage.py"]
+    subgraph demo1["Demo 1: naive agent process"]
+        naive["naive_refund.py<br/>same decision step, no Temporal<br/>answers in a local dict"]
+    end
+    subgraph server["Temporal dev server: gRPC 7233, Web UI 8233"]
+        queue["Private task queue<br/>refund-stage-token"]
+        history[("Event History<br/>RefundApprovalAgent")]
+    end
+    subgraph worker["Worker process: worker.py, killed then replaced"]
+        wf["Workflow loop<br/>workflow.py"]
+        acts["Activities<br/>agent_decide_next_step, 3 fixture lookups,<br/>issue_refund"]
+    end
+    naiveLedger[("Naive ledger, offline<br/>naive-ledger.json")]
+    effectLedger[("Effect ledger, offline<br/>effect-ledger.json")]
+    stripe[("Stripe test mode<br/>--real only")]
+    stage -->|"stdin and stdout"| naive
+    naive -->|"read-only check, offline"| naiveLedger
+    naive -->|"read-only check, --real"| stripe
+    stage -->|"start, Signals, Queries, history reads"| server
+    worker -->|"polls"| queue
+    history -.->|"replayed after a restart"| wf
+    wf --> acts
+    acts -->|"one refund per idempotency key"| effectLedger
+    acts -->|"same, with --real"| stripe
+    stage -.->|"SIGKILL, then a replacement"| worker
+```
 
 `uv run refund-demo stage`
 ([`src/refund_agent/stage.py`](../src/refund_agent/stage.py)) is the only command
@@ -15,8 +46,8 @@ For Demo 1, it launches a naive agent subprocess
 stdin and stdout. The subprocess runs the same loop as Demo 2, in process: each
 turn calls `decide_next_step`, the function behind the `agent_decide_next_step`
 Activity, so it uses the fixed policy by default and the live model with
-`--real-model`. It keeps the customer's answers and observations in local
-lists. After it is killed, a new subprocess only reads
+`--real-model`. It keeps the customer's answers in a local dict and its
+observations in a local list. After it is killed, a new subprocess only reads
 the effect owner. Offline, that is its own `naive-ledger.json`; with `--real`,
 it retrieves the PaymentIntent and its refund list from Stripe test mode.
 
@@ -127,6 +158,31 @@ The change from a plain in-process loop is small. Demo 1's naive process
 | `step = decide_next_step(request, working_memory)` | `step = await workflow.execute_activity(agent_decide_next_step, args=[request, self.working_memory], ...)` |
 | `answer = sys.stdin.readline()` | A `customer_answer` Signal, then `await workflow.wait_condition(...)` |
 | `working_memory.append(result)`, held in RAM | `self.working_memory.append(result)`, rebuilt by replay after a restart |
+
+## Temporal owns retries
+
+No client retries on its own. Every retry is a Temporal Activity attempt, so
+Temporal Web shows the attempt count and the last failure.
+
+**Model calls.** The Anthropic and OpenAI clients are built with
+`max_retries=0`, because both SDKs otherwise retry inside the call, where
+Temporal can't see it. A 429, a 5xx, a connection error, or the 45-second client
+timeout fails that `agent_decide_next_step` attempt. Its retry policy then tries
+again: up to 5 attempts per model turn, each inside a 60-second Activity
+timeout. Other 4xx errors fail the turn without a retry.
+
+**Stripe calls.** The Stripe client sets `max_network_retries = 0`. The refund
+call allows 3 seconds to connect and 10 seconds of silence from Stripe while
+reading. `issue_refund` heartbeats every second while it waits, so a slow call
+is not taken for a lost Worker. A timeout, a dropped connection, a 409, a 429,
+or a 5xx fails that attempt. (Stripe returns 409 while an earlier call with the
+same idempotency key is still running.) The next attempt reuses the same
+idempotency key, after Stripe's `Retry-After` wait if it sent one of 60 seconds
+or less. Other 4xx errors fail the refund without a retry, and a
+`Stripe-Should-Retry` header overrides either choice.
+
+[Troubleshooting](TROUBLESHOOTING.md) lists the failure messages these paths
+print and what to do about each.
 
 ## Useful commands
 

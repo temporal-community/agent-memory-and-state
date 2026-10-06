@@ -44,6 +44,14 @@ the weights, so you can't see or edit it while the agent runs; only retraining
 or fine-tuning changes it. When the weights and a record disagree, the record
 wins.
 
+### Temporal is not a memory store
+
+Temporal rebuilds this run's working memory by replay, but long-term memory is
+still a store you own, and
+[Event History is bounded](HISTORY_GROWTH.md). Temporal can run the store's
+reads and writes as Activities, so each one is recorded and retried like any
+other step. How best to combine the two is still an open design question.
+
 ### Can domain state also be memory?
 
 Yes. These are roles, not storage types. An order row is authoritative domain

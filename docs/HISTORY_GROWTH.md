@@ -4,8 +4,9 @@ Back to the [README](../README.md#when-event-history-grows-claim-check-and-conti
 
 Temporal records the input and result of every Activity in Event History. That
 record is how a replacement Worker rebuilds the loop and resumes at
-`issue refund`. The record also has limits, and an agent loop can reach them
-without meaning to.
+`issue refund`. Every step is saved, so a long agent run builds a big history.
+A bigger history makes that rebuild after a crash slower, and the record has
+limits that an agent loop can reach without meaning to.
 
 ## Why an agent loop grows its history
 
@@ -24,12 +25,21 @@ SDK's default converter, not from a live run; what you type as the refund
 request changes them slightly. Read the real number from your run in Temporal
 Web.
 
-The problem appears when tool results are large and the loop runs long. A
-payload-only model (not a measured run) with 20 KiB tool results and no turn
-cap crosses 4 MiB around turn 20, 10 MiB around turn 32, and 50 MiB around turn
+The problem appears when tool results are large and the loop runs long. Take a
+payload-only model (an estimate, not a measured run) with 20 KiB tool results
+and no turn cap: turn 1 saves 20 KiB, turn 2 saves 40 KiB, and turn 20 alone
+saves 400 KiB. The total crosses 4 MiB, where Temporal suggests
+continue-as-new, around turn 20; 10 MiB around turn 32; and 50 MiB around turn
 72. Real histories carry more than payloads, so the real crossings come at or
 before these turns. That is still fewer than a thousand events: bytes reach the
 limits before the event count does.
+
+The model input grows the same way. In the same example, the turn-70 model
+call alone sends about 350K input tokens, about $1.06 on Claude Sonnet 4.6 at
+the 2026-09-29 list price of $3 per million input tokens (about 4 bytes per
+token, uncached). The
+[cost methodology](COST.md#how-these-numbers-were-produced) has this demo's own
+tokens and dollars per pass.
 
 ## See it in Temporal Web
 
@@ -102,10 +112,15 @@ state keeps only a key (a claim check).
 
 ## Fix 1: claim check
 
-Store the large value outside Temporal and pass a small reference through
-Workflow and Activity inputs. An Activity loads the record when it needs it.
-Workflow code must never read the store directly, because that isn't
+For a result that's too big: save a ticket, not the data. It works like a coat
+check. Your store (S3 or a database) keeps the coat; Event History keeps only
+the ticket, a small key. The ticket replaces the big value in the Activity's
+result and in the next step's input, and an Activity loads the record when it
+needs it. Workflow code must never read the store directly, because that isn't
 deterministic.
+
+This demo doesn't need one. An agent that pulls a customer's full order history
+into context would.
 
 The Python SDK has this built in as
 [External Storage](https://docs.temporal.io/external-storage). You configure
@@ -133,11 +148,15 @@ What a claim check does not do:
 
 ## Fix 2: continue-as-new
 
-At a quiet point in the loop, with no Activity or question in flight, the
-Workflow can end its run and start a new one. The new run has the same Workflow
-ID, a new Run ID, and an empty Event History. It receives only the input you
-pass; memo and search attributes carry over by default. Signals and Queries
-sent by Workflow ID reach the new run.
+For a run that goes on and on: a fresh history, same Workflow. It works like a
+new notebook: copy over only the notes you need. At a quiet point in the loop,
+with no Activity or question in flight, once
+`workflow.info().is_continue_as_new_suggested()` returns `True`, the Workflow
+can end its run and start a new one. The new run has the same Workflow ID, a
+new Run ID, and an empty Event History. It receives only the input you pass,
+such as the turns done and the customer's answers; memo and search attributes
+carry over by default. The old run stays readable until retention ends, and
+Signals, Queries, and Updates sent by Workflow ID reach the newest run.
 
 ```python
 if workflow.info().is_continue_as_new_suggested():
