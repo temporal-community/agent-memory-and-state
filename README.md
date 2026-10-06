@@ -44,7 +44,7 @@ customer has to start the return again. The durable agent runs the same steps
 as a Temporal Workflow. A new Worker rebuilds the loop from Event History and
 resumes at `issue refund` without repeating a question.
 
-![The durable demo's stage screen right after its Temporal Worker was killed. The left pane, Temporal Worker, reads WORKER GONE: its in-memory loop is gone, and Temporal still has the saved loop. The right pane, What Survives, shows what was read from Temporal just now: customer answers 2, completed lookups 2, next action issue refund. Below it, the offline ledger (Stripe stand-in) shows payment PAID and refund none.](assets/durable-saved.png)
+![The durable demo's stage screen right after its Temporal Worker was killed. The left pane, Temporal Worker, reads WORKER GONE: its in-memory loop is gone, and Temporal still has the saved loop. A dim note says the demo stops the Worker here, before the refund reaches Stripe. The right pane, What Survives, shows what was read from Temporal just now: customer answers 2, completed lookups 2, next action issue refund. Below it, the offline ledger (Stripe stand-in) shows payment PAID and refund none.](assets/durable-saved.png)
 
 **Last verified: 2026-10-02.** One offline `uv run refund-demo stage` run, in
 which the new Worker completed the refund in the offline ledger, and one

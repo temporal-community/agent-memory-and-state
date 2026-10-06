@@ -209,7 +209,7 @@ def _render_durable_frames(output_dir: Path) -> None:
             path.write_text(json.dumps(view), encoding="utf-8")
 
             tui._worker_alive = lambda: (False, 4242)
-            lost_agent = tui._stage_agent_panel(WORKFLOW_ID)
+            lost_agent = tui._stage_agent_panel(WORKFLOW_ID, stopped_before_refund=True)
             _export(
                 tui._stage_build(
                     lost_agent,
