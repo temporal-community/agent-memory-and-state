@@ -100,14 +100,22 @@ passed. Not re-run on this date: `--real` without `--real-model`,
 
 | Video | What it shows |
 | --- | --- |
-| **Temporal & AI Series: Agent Memory & State** (link added after publish) | An agent is killed one step before a refund. The naive agent loses the customer's answers; the durable loop resumes at `issue refund`. It also covers why Event History grows, and when to use a claim check or continue-as-new. |
+| **Temporal & AI Series: Agent Memory & State** (link added after publish) | The agent's process stops one step before a refund. The naive agent loses the customer's answers; the durable loop resumes at `issue refund`. It also covers why Event History grows, and when to use a claim check or continue-as-new. |
 
 Part of the **Temporal & AI Series** playlist (link added after publish).
-Chapters: Hook · The problem · Demo · How memory and execution state relate ·
-Where Temporal fits · Pros, cons, and gotchas · Cost to run · Takeaways and
-resources. Timestamps are added after the final cut. The video's key moment is
-written down in [The money moment](#the-money-moment), and the full cost is in
-[Cost to run](#cost-to-run).
+Chapters: Hook and Demo 1 (the agent loses the refund) · What just happened ·
+The agent loop and agency levels · Context, memory, and state · Memory kinds ·
+Facts have owners · What Temporal is · Demo 2 (the same crash, with Temporal) ·
+Replay, not redo · History growth: claim check and continue-as-new · The
+trade-off · Cost to run · Memory vs execution state · Run it yourself.
+Timestamps are added after the final cut.
+
+The video ran `uv run refund-demo stage --real --real-model --model-provider
+openai`, which needs an OpenAI key and a Stripe test key. `make run` is the
+key-free offline version: a fixed policy, sample data, and no model calls.
+
+The video's key moment is written down in [The money moment](#the-money-moment),
+and the full cost is in [Cost to run](#cost-to-run).
 
 Links, the code as presented, and further reading are in
 [Resources](#resources).
@@ -130,8 +138,8 @@ answer arrives as a `customer_answer` Signal, and a model turn or a lookup
 finishes as an Activity. When the Worker dies, a new Worker replays that
 history, rebuilds the loop and `working_memory`, and continues at the next
 unfinished step without calling the finished ones again. Replay, not redo. In
-the video: "It's not redoing any of those steps it's already done. It's
-replaying them." Temporal doesn't decide what the agent does or make the
+the video: "It didn't redo all those steps. It just replayed it." Temporal
+doesn't decide what the agent does or make the
 model's answer right; evals and guardrails cover that. It doesn't make the
 refund exactly once either: every retry sends the same Stripe idempotency key,
 so Stripe makes one refund.
@@ -387,11 +395,11 @@ Temporal still has both answers, the completed lookups, and
 `Next action: issue refund`, and the stage reads them back from Event History
 on the `WORKER GONE` frame ([shown at the top](#agent-memory-and-state)). The
 new Worker finishes with `NO REPEATED QUESTIONS`, `NO LOOP RESTART`, and "Your
-refund is complete." As the video puts it: "The customer didn't have to go back
-through the whole flow again."
+refund is complete." As the video puts it, the new Worker "picks up from the
+next step it was supposed to take in that loop, which is to issue the refund."
 
-In the video: "Memory helps reasoning continue. Temporal helps the operation
-continue."
+On the video's closing slide: "Memory helps reasoning continue. Temporal helps
+the operation continue."
 
 For proof beyond the stage screen, [Temporal Web](docs/TEMPORAL_WEB.md#what-to-check-at-each-frame)
 shows the Workflow still Running during `WORKER GONE` and no repeated
