@@ -394,9 +394,9 @@ to 6,900 input and 200 to 400 output tokens per demo, about two cents. Both are
 priced at list prices checked on 2026-09-29. Starting Demo 1 over paid the four
 calls again (2,972 tokens, $0.0009, measured). Killing the Worker in Demo 2
 added no model calls, because the new Worker replays the recorded turns. The
-README's
-"Cost to run" has the full table, and [the cost methodology](COST.md) has a way
-to measure a pass.
+README's "Cost to run" has the per-pass table, and
+[the cost methodology](COST.md) has the worst case, the Claude start-over, and
+a way to measure a pass.
 
 **Doesn't Event History grow forever?**
 

@@ -2,7 +2,7 @@
 
 Back to the [README](../README.md). The README's
 [Choose the stage path](../README.md#choose-the-stage-path) table lists the
-commands and their model tokens and dollars per pass; this page explains what
+commands and their model tokens and dollars per take; this page explains what
 the runner does and what each option needs.
 
 ## What the runner does
@@ -35,6 +35,10 @@ The guided runner:
    `NEW TEMPORAL WORKER` resumes at `issue refund` without repeating questions,
    issues the refund, and reports completion.
 
+The screens call the naive side the agent process (`PROCESS GONE`,
+`NEW AGENT PROCESS`), because it is not a Temporal Worker, and keep "Worker"
+for the Temporal side (`WORKER GONE`, `NEW TEMPORAL WORKER`).
+
 Every input prompt says literally what Enter does next, such as
 `Press Enter to submit the refund`, and each demo's header has a dim line
 naming what is scripted or live: by default
@@ -48,13 +52,39 @@ screens label it `OFFLINE LEDGER (Stripe stand-in)`. It
 starts a local Temporal dev server only when one is not already reachable and
 shuts down only the processes it started.
 
+## Put it under real conditions
+
+The failure is a Temporal Worker that dies mid-loop. The default stage run
+sends it a real SIGKILL one step before the refund. Before the kill, Demo 2's
+agent loop shows `→ Next: issue refund`, the stage waits for Enter, and the
+Worker is still alive.
+
+After the kill (`WORKER GONE`), the Workflow is still `Running`, with no Worker.
+That is normal: the Workflow lives on the Temporal server, and Workers only poll
+its task queue.
+
+To watch it, [start your own dev server](TEMPORAL_WEB.md#start-your-own-dev-server)
+first, then follow
+[What to check at each frame](TEMPORAL_WEB.md#what-to-check-at-each-frame): the
+`stage_progress` Query before the kill, the History and Workers tabs while the
+Worker is gone, and the completed history after recovery.
+
 ## Simulated Stripe timeout
 
-The timeout path is the recommended retry demo. Attempt 1 enters
-`issue_refund`, but the simulated Stripe API does not respond before the Worker
-disappears. This path sends no `release` Signal. Temporal advances the Activity
-to attempt 2 and waits until you start a new Worker; only then does
-the refund reach Stripe.
+The timeout path is the recommended retry demo. It kills the Worker while the
+refund Activity is in flight instead. Run `make failure`, or the command it
+runs:
+
+```bash
+uv run refund-demo stage --simulate-stripe-timeout
+```
+
+Attempt 1 enters `issue_refund`, but the simulated Stripe API does not respond,
+and the Worker is killed before any refund is accepted. This path sends no
+`release` Signal. Temporal advances the Activity to attempt 2 and waits until
+you start a new Worker. The new Worker runs attempt 2 with the same idempotency
+key; only then does the refund reach Stripe. This command runs offline with no
+model calls (0 tokens, $0).
 
 ## Live models and Stripe test mode
 
@@ -81,6 +111,17 @@ never cents, so the model's rationale reads like
 memory keep cents. The [expected output](EXPECTED_OUTPUT.md#with-a-live-model)
 lists the on-screen differences.
 
+## Which lines read Stripe
+
+Not every Stripe line on screen is a live Stripe read. `Payment: PAID` in the
+durable pane, and in the naive pane before the kill, is a fixed label. The
+durable refund line reads a local mirror of Stripe's response. Only the new
+agent process's status check reads Stripe directly, and only with `--real`;
+offline, it reads its own naive ledger. In the default mode the pane heading
+says `OFFLINE LEDGER (Stripe stand-in)` (with `--real`, `STRIPE (test mode)`),
+but the agent's lines, the Worker log, and the `issue_refund` summary in Event
+History still say "Stripe" as the story's name for the effect owner.
+
 ## `--real` mode and cleanup
 
 In `--real` mode, the runner creates and confirms Nyghtowl's Stripe test
@@ -88,7 +129,7 @@ PaymentIntent before the first refund prompt. The naive replacement reads that
 PaymentIntent and its refunds from Stripe and confirms no refund reached
 Stripe; only the durable half later refunds the test payment. The other
 `Payment: PAID` lines on screen are fixed labels (see
-[What it is not](../README.md#what-it-is-not)). If a run ends before the
+[Which lines read Stripe](#which-lines-read-stripe)). If a run ends before the
 refund, reconcile it with:
 
 ```bash
