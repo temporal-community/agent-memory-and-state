@@ -2,9 +2,9 @@
 
 ## Purpose
 
-This repository is a teaching demo for a ten-minute talk about agent memory,
-authoritative state, and durable execution. Preserve the story as carefully as
-the code:
+This repository is a teaching demo for a 10- to 12-minute talk about agent
+memory, authoritative state, and durable execution. Preserve the story as
+carefully as the code:
 
 - Context is what the model sees for a decision.
 - Memory is retained or retrieved information the agent reasons with.
@@ -78,7 +78,8 @@ model.
 - Do not make a duplicate refund or an uncertain Stripe effect the main stage
   payoff. Contrast remembered facts with Temporal retaining completed
   observations and the autonomous loop's next action. Keep the post-effect
-  idempotency case in the manual technical walkthrough.
+  idempotency case in the manual walkthrough
+  (`docs/GUIDE.md#later-loss-after-stripe-accepts-the-refund`).
 
 ## Implementation boundaries
 
@@ -106,7 +107,7 @@ model.
   simulated-failure paths.
 - Pass `temporal_identity()` to every Temporal client, so each process reports
   `<pid>@refund-demo` (or `TEMPORAL_IDENTITY` verbatim) and the machine's
-  hostname never shows in Temporal Web.
+  hostname never shows in the Temporal Web UI.
 - Never print, commit, or expose values from `.env` or API-key environment
   variables.
 - Do not run a real-model or Stripe test-mode rehearsal unless the task calls
@@ -120,9 +121,14 @@ model.
 - `src/refund_agent/activities.py`: model, tool, and refund side effects
 - `src/refund_agent/naive_refund.py`: uncoordinated comparison
 - `src/refund_agent/fake_stripe.py`: offline effect owner and call counter
+- `README.md`: what the demo shows, how to run it, architecture, the
+  terminology and ownership model (`#memory-and-execution-state`), cost, and
+  how other approaches compare
+- `docs/GUIDE.md`: stage flags, Web UI checks, expected output, the manual
+  walkthrough, the authorization companion demo, and every error
+- `docs/HISTORY_GROWTH.md`: Event History growth, claim check, and
+  Continue-As-New
 - `docs/TALK_10_MIN.md`: canonical talk timing, wording, and controls
-- `docs/CONCEPTS.md`: terminology and ownership model
-- `docs/REFUND_DEMO.md`: manual technical walkthrough
 
 ## Verification
 
@@ -156,8 +162,20 @@ only at 128.
 
 ## Documentation and generated media
 
-- Keep `README.md`, `docs/TALK_10_MIN.md`, `docs/CONCEPTS.md`, and
-  `docs/REFUND_DEMO.md` aligned when the story or stage flow changes.
+- The docs are `README.md`, `docs/GUIDE.md`, `docs/HISTORY_GROWTH.md`, and
+  `docs/TALK_10_MIN.md`. Say each point once, in the section that owns it,
+  and link there from elsewhere. The README owns the concepts, architecture,
+  cost, and comparison; `docs/GUIDE.md` owns stage flags, Web UI checks,
+  expected output, the manual walkthrough, and troubleshooting. Add to the
+  owner rather than starting a new doc.
+- Keep `README.md`, `docs/GUIDE.md`, and `docs/TALK_10_MIN.md` aligned when
+  the story or stage flow changes. Stage copy appears in the README's key
+  lines (`#same-crash-two-outcomes`), the guide's transcript
+  (`#stage-transcript`), and the talk's cue table.
+- A few facts are repeated on purpose, so change every copy: the measured cost
+  (README `#cost-to-run`, the top of the guide's `#run-the-stage`, and the
+  talk's cost beat) and the README's three Troubleshooting rows (the first
+  rows of the guide's `#troubleshooting`).
 - Each `Makefile` recipe is the raw command shown beside it in the README's
   Make targets table. Change both together, and keep `make reset` from
   deleting files or stopping servers.

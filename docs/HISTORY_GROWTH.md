@@ -1,17 +1,17 @@
-# When Event History grows: claim check and continue-as-new
+# When Event History grows: claim check and Continue-As-New
 
-Back to the [README](../README.md#when-event-history-grows-claim-check-and-continue-as-new).
+Back to the [README](../README.md#gotchas).
 
 Temporal records the input and result of every Activity in Event History. That
-record is how a replacement Worker rebuilds the loop and resumes at
+record is how a new Worker rebuilds the loop and resumes at
 `issue refund`. Every step is saved, so a long agent run builds a big history.
 A bigger history makes that rebuild after a crash slower, and the record has
 limits that an agent loop can reach without meaning to.
 
 ## Why an agent loop grows its history
 
-On every turn, `RefundWorkflow` passes the request and the whole
-`working_memory` list to `agent_decide_next_step`
+On every turn, the `RefundApprovalAgent` Workflow passes the request and the
+whole `working_memory` list to `agent_decide_next_step`
 ([`workflow.py`](../src/refund_agent/workflow.py)), and `issue_refund` receives
 the list once more. Each tool result is recorded once as that tool's result,
 then again inside every later `agent_decide_next_step` input. After N tool
@@ -22,14 +22,14 @@ default request, the `agent_decide_next_step` input grows from about 0.5 KB to
 about 1.1 KB over five turns, and all Activity payloads together come to under
 7 KB. Those sizes come from serializing the stage's default values with the
 SDK's default converter, not from a live run; what you type as the refund
-request changes them slightly. Read the real number from your run in Temporal
-Web.
+request changes them slightly. Read the real number from your run in the
+Temporal Web UI.
 
 The problem appears when tool results are large and the loop runs long. Take a
 payload-only model (an estimate, not a measured run) with 20 KiB tool results
 and no turn cap: turn 1 saves 20 KiB, turn 2 saves 40 KiB, and turn 20 alone
 saves 400 KiB. The total crosses 4 MiB, where Temporal suggests
-continue-as-new, around turn 20; 10 MiB around turn 32; and 50 MiB around turn
+Continue-As-New, around turn 20; 10 MiB around turn 32; and 50 MiB around turn
 72. Real histories carry more than payloads, so the real crossings come at or
 before these turns. That is still fewer than a thousand events: bytes reach the
 limits before the event count does.
@@ -37,17 +37,16 @@ limits before the event count does.
 The model input grows the same way. In the same example, the turn-70 model
 call alone sends about 350K input tokens, about $1.06 on Claude Sonnet 4.6 at
 the 2026-09-29 list price of $3 per million input tokens (about 4 bytes per
-token, uncached). The
-[cost methodology](COST.md#how-these-numbers-were-produced) has this demo's own
-tokens and dollars per pass.
+token, uncached). [Cost to run](../README.md#cost-to-run) has this demo's own
+tokens and dollars per pass, and how they were measured.
 
-## See it in Temporal Web
+## See it in the Temporal Web UI
 
 No code changes are needed:
 
-1. Open a finished stage run in Temporal Web, on a server you started yourself
-   (see [Watch it in Temporal Web](TEMPORAL_WEB.md)). The Workflow's
-   summary shows its history size.
+1. Open a finished stage run in the Temporal Web UI, on a server you started
+   yourself (see [Start your own dev server](GUIDE.md#start-your-own-dev-server)).
+   The Workflow's summary shows its history size.
 2. In the History tab, open any `WorkflowTaskStarted` event. It carries
    `historySizeBytes`, the size at that point.
 3. Open the first and the last `agent_decide_next_step` `ActivityTaskScheduled`
@@ -61,7 +60,7 @@ No code changes are needed:
 
 | Threshold | History size | Events | What happens |
 | --- | --- | --- | --- |
-| Continue-as-new suggested | 4 MiB | 4,096 | `workflow.info().is_continue_as_new_suggested()` returns `True`. Nothing is enforced. Python Workflow code gets only a yes/no, not a reason. |
+| Continue-As-New suggested | 4 MiB | 4,096 | `workflow.info().is_continue_as_new_suggested()` returns `True`. Nothing is enforced. Python Workflow code gets only a yes/no, not a reason. |
 | Warning | 10 MB | 10,240 | The server logs warnings. |
 | Limit | 50 MB | 51,200 | The Workflow Execution is terminated. |
 | One payload | 2 MB. The warning comes at a few hundred KB; the docs list both 256 KB and 512 KB | n/a | A payload the Workflow produces fails the Workflow Task, and on Python SDK 1.23+ the run stays open until you deploy a fix. An oversized Activity result fails that Activity attempt instead. The SDK enforces this only when the server reports its limits at Worker start. |
@@ -72,7 +71,7 @@ and payload limits are fixed. Sources:
 [Temporal Cloud limits](https://docs.temporal.io/evaluate/cloud/limits),
 [payload size errors](https://docs.temporal.io/troubleshooting/blob-size-limit-error),
 [very long-running Workflows](https://temporal.io/blog/very-long-running-workflows)
-(the continue-as-new suggestion), and the server's
+(the Continue-As-New suggestion), and the server's
 [dynamic config defaults](https://github.com/temporalio/temporal/blob/main/common/dynamicconfig/constants.go).
 
 ## Measured in the fleet demo
@@ -87,7 +86,7 @@ and 408,054 bytes (0.4 MiB).
 
 The fleet rolls each driver Workflow over at 10,000 events, at a quiet point
 when the driver is idle with nothing pending
-([continue-as-new code](https://github.com/temporal-community/temporal-ai-hitl-adk-langgraph/blob/as-presented-2026-07/agent_fleet/workflows.py#L390-L414)).
+([Continue-As-New code](https://github.com/temporal-community/temporal-ai-hitl-adk-langgraph/blob/as-presented-2026-07/agent_fleet/workflows.py#L390-L414)).
 The parent has the same guard, but a pass ends before it fires. Both count
 events, not bytes. The inline parent reached 9.0 MiB at 4,947 events, so on a
 longer run it would pass the 10 MiB warning long before 10,000 events.
@@ -106,7 +105,7 @@ has every tab and what changes the cost.
 
 Temporal owns where the work stands: which steps finished, what the loop is
 waiting for, and what it does next. Small observations belong in Workflow
-state; they are what let the reloaded agent resume without repeating
+state; they are what let a new Worker resume without repeating
 questions. Large records belong in your own store, such as S3, and Workflow
 state keeps only a key (a claim check).
 
@@ -142,11 +141,11 @@ What a claim check does not do:
   record. Shrinking context is summarization or compaction, which is the memory
   system's job.
 - Temporal never deletes offloaded objects. You own their lifecycle.
-- Temporal Web shows a reference instead of the data unless you run a codec
-  server.
+- The Temporal Web UI shows a reference instead of the data unless you run a
+  codec server.
 - Every Client and Worker needs the same driver, with the same name.
 
-## Fix 2: continue-as-new
+## Fix 2: Continue-As-New
 
 For a run that goes on and on: a fresh history, same Workflow. It works like a
 new notebook: copy over only the notes you need. At a quiet point in the loop,
@@ -176,18 +175,18 @@ Rules:
 - Version the carried state's shape, because running Workflows continue into
   new code.
 - In this repo, roll over only before `issue_refund`. Its Stripe idempotency
-  key includes the Run ID, which continue-as-new changes. If a key ever has to
-  survive continue-as-new, derive it from
+  key includes the Run ID, which Continue-As-New changes. If a key ever has to
+  survive Continue-As-New, derive it from
   `workflow.info().first_execution_run_id`, not from the request ID (which
   defaults to the Workflow ID and would collide across reused IDs).
 
 This repo implements neither fix, because the shipped loop never gets close to
 a limit. For working patterns, see
-[continue-as-new](https://docs.temporal.io/design-patterns/continue-as-new),
+[Continue-As-New](https://docs.temporal.io/design-patterns/continue-as-new),
 the [claim check cookbook](https://docs.temporal.io/ai/cookbook/claim-check-pattern-python),
 and [External Storage in Python](https://docs.temporal.io/develop/python/data-handling/external-storage).
 
-## What continue-as-new looks like (sketch)
+## What Continue-As-New looks like (sketch)
 
 The demo doesn't run this. It's a standalone sketch, not in this repo, that
 uses the demo's names. Its request has two fields the demo's lacks: `resume`
