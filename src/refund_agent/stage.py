@@ -237,6 +237,9 @@ class _Services:
         environment = os.environ.copy()
         environment["DEMO_STATE_DIR"] = str(self.stage_state)
         environment["TEMPORAL_TASK_QUEUE"] = self.task_queue
+        # Demo-only: on the retry drill, the Worker holds attempt 1 open this long
+        # after Stripe accepts it, so the stage can kill it before Temporal
+        # records the result. It is 0, no hold, on every other run.
         environment["EFFECT_RESTART_WINDOW_SECONDS"] = str(
             self.effect_restart_window_seconds
         )
@@ -265,6 +268,8 @@ class _Services:
         raise RuntimeError("Worker did not become ready")
 
     def kill_worker(self) -> None:
+        # A real SIGKILL, like a crash or an out-of-memory kill: the Worker gets
+        # no chance to shut down cleanly.
         _stop_process(self.worker, hard=True)
 
     def close(self) -> None:
@@ -467,10 +472,12 @@ async def _read_naive_loop_event(
     # A live model turn can take seconds; its client times out at 45 s.
     if process.stdout is None:
         raise RuntimeError("naive Worker output is unavailable")
+    # A local keeps the None check above in force inside the nested function.
+    stdout = process.stdout
 
     async def read_event() -> dict[str, str]:
         while True:
-            line = await asyncio.to_thread(process.stdout.readline)
+            line = await asyncio.to_thread(stdout.readline)
             if not line:
                 raise RuntimeError("naive Worker exited during the agent loop")
             label, separator, payload = line.partition("|")
@@ -500,10 +507,12 @@ async def _drive_naive_replacement(
         raise RuntimeError("replacement naive Worker pipes are unavailable")
     process.stdin.write(status_question + "\n")
     process.stdin.flush()
+    # A local keeps the None check above in force inside the nested function.
+    stdout = process.stdout
 
     async def read_result() -> tuple[dict[str, object], list[dict[str, object]]]:
         while True:
-            line = await asyncio.to_thread(process.stdout.readline)
+            line = await asyncio.to_thread(stdout.readline)
             if not line:
                 raise RuntimeError("replacement naive Worker exited before answering")
             label, separator, raw_payload = line.partition("|")
@@ -693,6 +702,9 @@ async def _drive_temporal_loop(
         phase = last_progress.get("phase")
         pending = last_progress.get("pending_question") or {}
         if pending:
+            # Staged: answer each question with the customer's Demo 1 answer,
+            # sent as a customer_answer Signal, so nobody types it twice. A real
+            # app sends the customer's own reply as the Signal.
             question_id = str(pending.get("question_id") or "")
             if question_id not in sent_questions:
                 answer = answers.get(
@@ -705,14 +717,19 @@ async def _drive_temporal_loop(
                 )
                 sent_questions.add(question_id)
         elif phase == "waiting_for_approval" and not approval_sent:
+            # Staged: the runner approves an escalated refund itself. A real app
+            # waits here for a person to send the approve Signal.
             await handle.signal(
                 RefundWorkflow.approve,
                 "approved by the guided stage runner",
             )
             approval_sent = True
         elif phase == "ready_to_refund":
+            # Parked in the demo-only pause before the refund, waiting for
+            # `release`.
             return "ready", _loop_steps_from_progress(last_progress)
         elif phase == "issuing_refund":
+            # The timeout drill has no pause, so the refund is already running.
             return "issuing", _loop_steps_from_progress(last_progress)
         elif phase in {"holding_after_effect", "completed"}:
             # Past the refund already, so stop polling instead of timing out.
@@ -790,6 +807,8 @@ def _durable_request(
 ) -> RefundRequest:
     """Build the Demo 2 Workflow input for the selected stage path."""
 
+    # This is where the stage turns on the demo-only switches. RefundRequest in
+    # models.py says what each one does.
     return RefundRequest(
         request_id=workflow_id,
         order_id="order-1234",
@@ -802,6 +821,8 @@ def _durable_request(
         damage=None,
         refund_destination="Original card",
         interactive_questions=True,
+        # The pause before the refund. The timeout drill skips it, because it
+        # kills the Worker during attempt 1 instead.
         hold_before_effect=not simulate_stripe_timeout,
         fast_recovery=True,
         simulate_stripe_timeout=simulate_stripe_timeout,
@@ -1008,6 +1029,8 @@ async def run(
                 )
             return
         if simulate_stripe_timeout:
+            # Failure drill with no pause: wait until attempt 1 hangs on the
+            # simulated Stripe timeout, then kill the Worker mid-Activity.
             with console.status(
                 "Attempt 1 is waiting on Stripe; killing the Worker..."
             ):
@@ -1017,6 +1040,8 @@ async def run(
                     timeout=_DEMO_TIMEOUT_SECONDS,
                 )
                 services.kill_worker()
+                # Wait out the 3 s heartbeat timeout, so Temporal has already
+                # timed out attempt 1 when the next frame draws.
                 await asyncio.sleep(_SIMULATED_RETRY_DETECTION_SECONDS)
             _show(
                 console,
@@ -1031,6 +1056,8 @@ async def run(
                 "attempt 2. Press Enter to start a new Worker",
             )
             with console.status("New Worker is running attempt 2..."):
+                # No `release` here: this drill never paused, so the new Worker
+                # just picks up attempt 2.
                 await services.start_worker()
                 result = await asyncio.wait_for(
                     handle.result(), timeout=_DEMO_TIMEOUT_SECONDS
@@ -1047,6 +1074,9 @@ async def run(
                 "Press Enter to submit the refund",
             )
 
+            # The Workflow is parked in the demo-only pause, waiting for
+            # `release`, so this kill lands at the same point on every run:
+            # after the agent chose the refund, before the refund reaches Stripe.
             services.kill_worker()
             await asyncio.sleep(0.25)
             # No Worker can answer a Query now, so read the saved loop from
@@ -1065,6 +1095,9 @@ async def run(
             )
 
         if simulate_stripe_retry:
+            # Failure drill after the pause: a new Worker gets `release` and calls
+            # Stripe on attempt 1, which the restart window holds open. The stage
+            # kills that Worker before Temporal records the result.
             with console.status(
                 "Calling Stripe, then killing the Worker before Temporal records it..."
             ):
@@ -1080,6 +1113,7 @@ async def run(
                         "the retry simulation ended before Stripe accepted the refund"
                     )
                 services.kill_worker()
+                # Wait out the 3 s heartbeat timeout, as in the timeout drill.
                 await asyncio.sleep(_SIMULATED_RETRY_DETECTION_SECONDS)
             _show(
                 console,
@@ -1095,6 +1129,8 @@ async def run(
             with console.status(
                 "New Worker is retrying with the same idempotency key..."
             ):
+                # Attempt 2 reuses the idempotency key, so Stripe returns the
+                # first refund instead of creating a second one.
                 await services.start_worker()
                 result = await asyncio.wait_for(
                     handle.result(), timeout=_DEMO_TIMEOUT_SECONDS
@@ -1104,6 +1140,9 @@ async def run(
                 "Starting a new Worker. It picks up from Temporal's history..."
             ):
                 await services.start_worker()
+                # End the demo-only pause. The new Worker replays history to the
+                # pause, then goes on to issue_refund. A real app sends no release:
+                # a new Worker resumes at whatever step the old one left.
                 await handle.signal(RefundWorkflow.release)
                 result = await asyncio.wait_for(
                     handle.result(), timeout=_DEMO_TIMEOUT_SECONDS

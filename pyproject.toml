@@ -3,9 +3,9 @@ requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "agent-memory-and-state"
+name = "temporal-ai-agent-memory-state-stripe"
 version = "0.1.0"
-description = "A small Temporal refund agent demo for durable execution talks"
+description = "A Temporal refund agent demo of agent memory and execution state"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -19,6 +19,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+  "mypy>=1.11,<2",
   "pytest>=8,<10",
   "rich>=13,<15",
   "ruff>=0.12,<1",
@@ -38,6 +39,13 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.mypy]
+python_version = "3.11"
+files = ["src"]
+warn_unused_ignores = true
+warn_redundant_casts = true
+check_untyped_defs = true
 
 [tool.ruff]
 line-length = 88

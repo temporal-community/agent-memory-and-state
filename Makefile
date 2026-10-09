@@ -1,7 +1,7 @@
 # Shortcuts for the commands in README.md. Each recipe is the raw command the
 # README shows beside it; `make -n <target>` prints it without running it.
 
-.PHONY: help setup run run-real failure reset test lint usage
+.PHONY: help setup run run-real failure reset test lint typecheck usage
 
 help: ## List the targets
 	@awk 'BEGIN {FS = ":.*## "} /^[a-z-]+:.*## / {printf "  make %-9s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -35,6 +35,9 @@ test: ## Offline test suite
 lint: ## Ruff lint and format check
 	uv run --extra dev ruff check .
 	uv run --extra dev ruff format --check .
+
+typecheck: ## Type-check src with mypy
+	uv run --extra dev mypy
 
 usage: ## Sum model tokens and dollars logged with LOG_MODEL_USAGE=1
 	uv run refund-demo usage

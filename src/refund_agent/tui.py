@@ -304,7 +304,7 @@ def _append_loop_steps(
             label = {
                 "item_opened": "Package opened",
                 "damage": "Damage",
-            }.get(step.get("question_id"), "Answer")
+            }.get(step.get("question_id", ""), "Answer")
             body.append(f"  ✓ {label}: {step.get('result')}\n", style="green")
         elif kind == "tool":
             # A lookup is what the agent looks up: the intro frame's MEMORY.
@@ -496,7 +496,11 @@ def _stage_system_view(
                 style="yellow",
             )
     else:
-        body.append(f"  Refund: {refund_status.upper()}\n", style="yellow")
+        # refund is not None on this branch, so refund_status is already a string.
+        # The fallback is only there for the type checker.
+        body.append(
+            f"  Refund: {(refund_status or 'unknown').upper()}\n", style="yellow"
+        )
         body.append("  Stripe has not confirmed it yet.\n", style="yellow")
     return Panel(body, title="WHAT SURVIVES", border_style="green")
 

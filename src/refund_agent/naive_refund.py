@@ -353,6 +353,8 @@ def _refund(args: argparse.Namespace) -> None:
         _line("THE SYSTEM", f"no refund issued for order {order}")
         return
     if args.hold_before_effect:
+        # Demo-only pause, at the same point as Demo 2's: hold before calling
+        # Stripe so the stage can kill this process there every run.
         _line(
             "REQUEST BUFFER",
             "next action held by this Worker; Stripe not called",
@@ -503,7 +505,10 @@ def _demo_frame(
             left.append(f"  Yes — your ${amount:.2f} refund succeeded.\n", style="bold")
         else:
             left.append("  Stripe has a refund record.\n", style="bold")
-            left.append(f"  Current status: {refund_status.upper()}.\n", style="yellow")
+            left.append(
+                f"  Current status: {(refund_status or 'unknown').upper()}.\n",
+                style="yellow",
+            )
             left.append("  It is not confirmed complete.\n", style="yellow")
     else:
         from refund_agent.tui import _append_loop_steps
@@ -530,7 +535,7 @@ def _demo_frame(
         right.append("  Refund: none\n", style="dim")
     else:
         right.append(
-            f"  Refund: {refund_status.upper()}\n",
+            f"  Refund: {(refund_status or 'unknown').upper()}\n",
             style="green" if refund_status == "succeeded" else "yellow",
         )
     for number, entry in enumerate(ledger, start=1):

@@ -1,179 +1,40 @@
-"""Activities contain every non-deterministic or fallible operation.
+"""The model turn: the agent_decide_next_step Activity and the decision behind it.
 
-The agent loop lives in the Workflow. Each turn it calls agent_decide_next_step
-(the model), which either asks for a tool or reaches a decision. The tools
-(lookup_order, lookup_customer_history, check_refund_policy) retrieve domain
-records whose results become the agent's working memory, and issue_refund is
-the one external effect.
+decide_next_step picks one turn's next step for both demos: the demo's intake
+questions, the fixed policy, or a live OpenAI or Anthropic model with tool
+calling. Usage logging for `refund-demo usage` lives here too.
 """
 
 from __future__ import annotations
 
-import concurrent.futures
 import json
 import os
-import time
 from dataclasses import asdict
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any, cast
 
 import anthropic
 import openai
-import stripe
 from anthropic import Anthropic
+from anthropic.types import ToolParam
 from openai import OpenAI
+from openai.types.responses import FunctionToolParam
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
-from refund_agent.fake_stripe import create_refund, idempotency_key_for, record_effect
-from refund_agent.models import (
-    AgentStep,
-    CustomerHistory,
-    OrderDetails,
-    RefundDecision,
-    RefundRequest,
-    RefundResult,
-    ReturnStatus,
+from refund_agent.activities.tools import TOOL_HISTORY, TOOL_ORDER, TOOL_POLICY
+from refund_agent.activities.view import (
+    _agent_summary,
+    _line,
+    _mirror_agent_view,
+    _view_for,
 )
-from refund_agent.settings import (
-    agent_view_path,
-    effect_restart_window_seconds,
-    model_usage_path,
-    state_dir,
-    validate_stripe_key,
-)
-
-# THE AGENT: these caches deliberately live only in this Worker process, keyed
-# by Workflow ID so concurrent runs never clobber one another. Temporal never
-# reads them. A restart erases them, which is the whole point on stage.
-_agent_views: dict[str, dict[str, object]] = {}
-
-
-def _view_for(workflow_id: str | None) -> dict[str, object]:
-    return _agent_views.setdefault(workflow_id or "unknown", {})
-
-
-# Tool names, shared between the loop dispatch and the model.
-TOOL_ORDER = "lookup_order"
-TOOL_HISTORY = "lookup_customer_history"
-TOOL_POLICY = "check_refund_policy"
+from refund_agent.models import AgentStep, RefundRequest
+from refund_agent.settings import model_usage_path
 
 # Refunds at or below this clear on their own; larger ones escalate to a human.
 APPROVE_THRESHOLD_CENTS = 10000
-
-
-def _line(label: str, value: object) -> None:
-    if isinstance(value, str):
-        rendered = value
-    else:
-        rendered = json.dumps(value, indent=2, sort_keys=True)
-    print(f"{label} | {rendered}", flush=True)
-
-
-def show_empty_agent_view() -> None:
-    _agent_views.clear()
-    # A new Worker process holds no agent memory, so wipe the on-disk mirror the
-    # TUI reads. After a restart this is what makes THE AGENT panel
-    # read empty while THE SYSTEM OF RECORD panel resumes.
-    for path in state_dir().glob("agent-view-*.json"):
-        path.unlink(missing_ok=True)
-    _line("THE AGENT", "new process, in-process view is empty")
-
-
-def _mirror_agent_view(workflow_id: str | None, view: dict[str, object]) -> None:
-    # Mirror the in-process view to disk so the TUI can render THE AGENT panel.
-    # The TUI trusts this file only while the Worker PID is alive, so the view
-    # still reads as lost the moment the Worker is killed.
-    if not workflow_id:
-        return
-    directory = state_dir()
-    directory.mkdir(parents=True, exist_ok=True)
-    path = agent_view_path(workflow_id)
-    temporary_path = path.with_suffix(".tmp")
-    temporary_path.write_text(
-        json.dumps(view, indent=2, sort_keys=True), encoding="utf-8"
-    )
-    os.replace(temporary_path, path)
-
-
-def _agent_summary(view: dict[str, object]) -> str:
-    # A concise, stage-legible view of what the agent holds in process.
-    parts: list[str] = []
-    context = view.get("context")
-    if isinstance(context, dict):
-        parts.append(f"context({context.get('request_id')})")
-    observations = view.get("observations")
-    if isinstance(observations, list) and observations:
-        tools = ", ".join(str(obs.get("tool")) for obs in observations)
-        parts.append(f"memory({tools})")
-    decision = view.get("decision")
-    if isinstance(decision, dict):
-        parts.append(f"decision({decision.get('recommendation')})")
-    return " + ".join(parts) if parts else "empty"
-
-
-# ---------------------------------------------------------------------------
-# Retrieval tools. Each returns a small fixture and prints what it pulled.
-# ---------------------------------------------------------------------------
-
-
-@activity.defn
-def lookup_order(order_id: str) -> OrderDetails:
-    """Retrieve domain state and return a copy for working memory."""
-
-    order = OrderDetails(
-        order_id=order_id,
-        item="python plushy",
-        amount_cents=8000,
-        status="delivered",
-        purchased_at="2026-06-03",
-    )
-    _line(
-        "MEMORY COPY",
-        f"lookup_order: {order.item}, ${order.amount_cents / 100:.2f}, {order.status}",
-    )
-    return order
-
-
-@activity.defn
-def lookup_customer_history(customer_id: str) -> CustomerHistory:
-    """Retrieve domain facts and return a copy for working memory."""
-
-    history = CustomerHistory(
-        customer_id=customer_id,
-        account_tenure_days=824,
-        purchases=[
-            "2026-06-03, python plushy, $80.00",
-            "2026-02-14, mechanical keyboard, $89.00",
-            "2025-11-20, rubber duck, $24.00",
-        ],
-        prior_refunds=["2025-08-09, laptop stickers, $18.00, approved"],
-    )
-    _line(
-        "MEMORY COPY",
-        f"lookup_customer_history: {history.account_tenure_days} days, "
-        f"{len(history.prior_refunds)} prior",
-    )
-    return history
-
-
-@activity.defn
-def check_refund_policy(order_id: str) -> ReturnStatus:
-    """Retrieve domain state and return a copy for working memory."""
-
-    status = ReturnStatus(
-        order_id=order_id,
-        eligible_for_refund=True,
-        return_required=False,
-        returned=False,
-        received_back=False,
-        note=(
-            "eligible for refund; this low-value damaged item does not need to "
-            "be returned"
-        ),
-    )
-    _line("MEMORY COPY", f"check_refund_policy: {status.note}")
-    return status
 
 
 # ---------------------------------------------------------------------------
@@ -264,7 +125,7 @@ def _canned_step(request: RefundRequest, working_memory: list[dict]) -> AgentSte
     )
 
 
-_TOOL_SCHEMAS = [
+_TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
         "type": "function",
         "name": "ask_customer",
@@ -498,7 +359,9 @@ def _openai_step(
             model=model,
             instructions=_AGENT_INSTRUCTIONS,
             input=payload,
-            tools=_TOOL_SCHEMAS,
+            # The SDK type requires a "strict" key. The schemas leave it out so
+            # the API default applies; the cast changes nothing at runtime.
+            tools=cast(list[FunctionToolParam], _TOOL_SCHEMAS),
             tool_choice="required",
             store=False,
         )
@@ -572,7 +435,7 @@ def _anthropic_step(
         )
     # Read before the paid call, so an invalid LOG_MODEL_USAGE fails first.
     usage_path = model_usage_path()
-    tools = [
+    tools: list[ToolParam] = [
         {
             "name": tool["name"],
             "description": tool["description"],
@@ -661,11 +524,14 @@ def decide_next_step(
         else None
     )
     if required_question is not None:
-        # Intake requirements remain stable across model providers. Once the
-        # answers exist, the selected model autonomously chooses lookups and the
-        # final action.
+        # Demo-only intake (interactive_questions): the same two questions, in a
+        # fixed order, whichever model provider runs. Once the answers exist,
+        # the selected model autonomously chooses lookups and the final action.
         return required_question
     if request.use_canned_agent:
+        # Demo-only: the fixed policy stands in for the model, so the stage plays
+        # the same way every run and makes no model calls. A real app calls its
+        # model here.
         return _canned_step(request, working_memory)
     provider = _selected_model_provider(request)
     if provider == "openai":
@@ -687,6 +553,7 @@ def decide_next_step(
             )
         return _anthropic_step(request, working_memory, api_key, agent=agent)
     if request.dry_run:
+        # Offline runs with no model configured fall back to the fixed policy.
         return _canned_step(request, working_memory)
     raise ApplicationError(
         "A live model key is required for a real run. Configure "
@@ -739,257 +606,3 @@ def agent_decide_next_step(
     _mirror_agent_view(workflow_id, view)
     _line("THE AGENT", f"in process: {_agent_summary(view)}")
     return step
-
-
-# ---------------------------------------------------------------------------
-# The one external effect.
-# ---------------------------------------------------------------------------
-
-# Stripe's HTTP client waits up to 80 s by default. The refund call instead
-# allows 3 s to connect and 10 s of silence while reading Stripe's response,
-# given as (connect, read) seconds the way the requests library takes them.
-# Those limits apply per socket operation, so they are not a wall-clock bound;
-# issue_refund heartbeats while it waits (_call_with_heartbeats), so a slow but
-# live call is not mistaken for a lost Worker. A hung call fails on these
-# timeouts, and Temporal retries it with the same idempotency key.
-STRIPE_TIMEOUT_SECONDS = (3.0, 10.0)
-
-# Like the Stripe SDK, honor a Retry-After of up to 60 s and ignore longer ones.
-_STRIPE_MAX_RETRY_AFTER_SECONDS = 60
-
-
-def _stripe_error_is_retryable(error: stripe.StripeError) -> bool:
-    """Return whether a failed refund call deserves another Temporal attempt.
-
-    With max_network_retries = 0 the SDK never retries, so the Activity retry
-    policy decides and every attempt shows in Temporal. Stripe's own signals
-    come first, as in the SDK's retry logic: a connection error's should_retry
-    (true for a timeout or dropped connection, false for an SSL failure), then a
-    Stripe-Should-Retry response header. Otherwise, as with the model calls, 429
-    and 5xx are retried, and so is 409, which Stripe returns while an earlier
-    call with the same idempotency key is still running. Every attempt reuses
-    that key, so a retry cannot create a second refund. Other 4xx errors, such
-    as a bad PaymentIntent, fail without a retry.
-    """
-
-    if isinstance(error, stripe.APIConnectionError):
-        return bool(error.should_retry)
-    should_retry = (error.headers or {}).get("stripe-should-retry")
-    if should_retry in ("true", "false"):
-        return should_retry == "true"
-    status = error.http_status or 0
-    return status in (409, 429) or status >= 500
-
-
-def _stripe_retry_delay(error: stripe.StripeError) -> timedelta | None:
-    """Return the wait Stripe asked for in Retry-After, if it sent one."""
-
-    try:
-        seconds = int((error.headers or {}).get("retry-after", ""))
-    except (TypeError, ValueError):
-        return None
-    if 0 < seconds <= _STRIPE_MAX_RETRY_AFTER_SECONDS:
-        return timedelta(seconds=seconds)
-    return None
-
-
-def _call_with_heartbeats(call, *args):
-    """Run a blocking call on a helper thread, heartbeating each second.
-
-    The heartbeat then means the Worker is alive, however long the call takes.
-    The start-to-close timeout still bounds the attempt.
-    """
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-        future = pool.submit(call, *args)
-        while True:
-            try:
-                return future.result(timeout=1.0)
-            except concurrent.futures.TimeoutError:
-                activity.heartbeat("waiting on Stripe")
-
-
-def _real_stripe_refund(
-    request: RefundRequest, workflow_id: str, idempotency_key: str
-) -> dict[str, object]:
-    secret_key = validate_stripe_key(
-        os.getenv("STRIPE_API_KEY"),
-        required=True,
-    )
-    stripe.api_key = secret_key
-    stripe.max_network_retries = 0
-    stripe.default_http_client = stripe.RequestsClient(timeout=STRIPE_TIMEOUT_SECONDS)
-    refund = stripe.Refund.create(
-        payment_intent=request.payment_intent_id,
-        amount=request.amount_cents,
-        reason="requested_by_customer",
-        metadata={
-            "temporal_workflow_id": workflow_id,
-            "temporal_idempotency_key": idempotency_key,
-        },
-        idempotency_key=idempotency_key,
-    )
-    return {
-        "refund_id": refund.id,
-        "status": refund.status,
-        "amount_cents": refund.amount,
-    }
-
-
-@activity.defn
-def issue_refund(
-    request: RefundRequest,
-    decision: RefundDecision,
-    working_memory: list[dict] | None = None,
-) -> RefundResult:
-    """EXTERNAL EFFECT: issue one idempotency-keyed refund."""
-
-    info = activity.info()
-    workflow_id = info.workflow_id
-    if workflow_id is None:
-        raise ApplicationError(
-            "issue_refund must run inside a Workflow",
-            type="MissingWorkflowIdentity",
-            non_retryable=True,
-        )
-
-    # IDEMPOTENCY KEY: derived from the workflow RUN identity. It stays stable
-    # across a restart retry (the same run keeps its run id) but is fresh for a
-    # brand new run, so reusing a workflow id never collides with an earlier
-    # run's effect.
-    run_id = info.workflow_run_id
-    idempotency_key = idempotency_key_for(f"{workflow_id}:{run_id}")
-
-    # Rebuild THE AGENT view from the recovered steps, so a Worker resuming this
-    # effect after a restart repopulates its in-process panel instead of staying
-    # blank. Temporal restored working_memory by replay; this only shows it.
-    if working_memory is None:
-        working_memory = []
-    view = _view_for(workflow_id)
-    view["context"] = asdict(request)
-    view["observations"] = working_memory
-    view["decision"] = {
-        "recommendation": decision.recommendation,
-        "rationale": decision.rationale,
-        "source": decision.source,
-    }
-    _mirror_agent_view(workflow_id, view)
-
-    _line(
-        "EXECUTION STATE",
-        f"issuing refund: attempt {info.attempt}, decision "
-        f"{decision.recommendation}, idempotency key ...{idempotency_key[-8:]}",
-    )
-
-    if request.simulate_stripe_timeout and info.attempt == 1:
-        # This is deliberately before the effect. It models a request waiting on
-        # an unresponsive Stripe API, so Stripe has accepted nothing. The stage
-        # runner removes this Worker; the heartbeat timeout then makes attempt 2
-        # visible in Event History and it waits for a replacement Worker.
-        _line(
-            "THE SYSTEM",
-            "Stripe API is not responding (simulated); no refund accepted",
-        )
-        deadline = time.monotonic() + 30
-        while time.monotonic() < deadline:
-            time.sleep(min(1.0, max(0.0, deadline - time.monotonic())))
-        raise ApplicationError(
-            "simulated Stripe API timeout",
-            type="StripeAPITimeout",
-        )
-
-    if request.dry_run:
-        try:
-            effect = create_refund(
-                workflow_id=workflow_id,
-                payment_intent_id=request.payment_intent_id,
-                amount_cents=request.amount_cents,
-                idempotency_key=idempotency_key,
-            )
-        except ValueError as error:
-            raise ApplicationError(
-                str(error),
-                type="IdempotencyConflict",
-                non_retryable=True,
-            ) from error
-        mode = "dry-run"
-    else:
-        try:
-            effect = _call_with_heartbeats(
-                _real_stripe_refund, request, workflow_id, idempotency_key
-            )
-        except stripe.StripeError as error:
-            message = getattr(error, "user_message", None) or str(error)
-            if _stripe_error_is_retryable(error):
-                # Fail this attempt only. The retry policy runs the next one
-                # with the same idempotency key, after Retry-After if Stripe
-                # sent one.
-                raise ApplicationError(
-                    f"Stripe refund call failed (retryable): {message}",
-                    type="StripeRetryableError",
-                    next_retry_delay=_stripe_retry_delay(error),
-                ) from error
-            # A bad PaymentIntent or similar cannot be fixed by retrying, so
-            # fail fast with a readable message instead of retrying and then
-            # surfacing an opaque "Activity task failed".
-            raise ApplicationError(
-                f"Stripe rejected the refund: {message}",
-                type="StripeRefundError",
-                non_retryable=True,
-            ) from error
-        mode = "stripe-test"
-        # Mirror the real refund locally so the panel can show one refund and
-        # its call count. Stripe stays the system of record.
-        try:
-            record_effect(
-                workflow_id=workflow_id,
-                refund_id=str(effect["refund_id"]),
-                status=str(effect["status"]),
-                amount_cents=int(effect["amount_cents"]),
-                payment_intent_id=request.payment_intent_id,
-                idempotency_key=idempotency_key,
-            )
-        except ValueError as error:
-            raise ApplicationError(
-                str(error),
-                type="IdempotencyConflict",
-                non_retryable=True,
-            ) from error
-
-    _line(
-        "THE SYSTEM",
-        f"refund accepted at Stripe: {effect['refund_id']} "
-        f"({mode}, attempt {info.attempt})",
-    )
-
-    restart_window = effect_restart_window_seconds()
-    if info.attempt == 1 and restart_window > 0:
-        _line(
-            "EXECUTION STATE",
-            f"restart window open {restart_window:.0f}s; run: refund-demo kill-worker",
-        )
-        # This pause is intentionally after the effect and before completion.
-        # Heartbeats keep attempt 1 alive until the process is actually killed.
-        deadline = time.monotonic() + restart_window
-        while time.monotonic() < deadline:
-            activity.heartbeat("effect accepted, result not reported")
-            time.sleep(min(1.0, max(0.0, deadline - time.monotonic())))
-
-    if request.hold_after_effect and info.attempt == 1:
-        # The clean beat: the refund is recorded, then the run holds open (a
-        # durable wait in the Workflow). Kill and restart the Worker now; replay
-        # sees this step already done and does not repeat it. Then release.
-        _line(
-            "EXECUTION STATE",
-            "refund recorded; holding for release. kill-worker now, restart, "
-            f"then: refund-demo release {workflow_id}",
-        )
-
-    return RefundResult(
-        refund_id=str(effect["refund_id"]),
-        status=str(effect["status"]),
-        amount_cents=int(effect["amount_cents"]),
-        idempotency_key=idempotency_key,
-        activity_attempt=info.attempt,
-        mode=mode,
-    )
