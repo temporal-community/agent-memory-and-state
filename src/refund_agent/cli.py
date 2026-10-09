@@ -78,6 +78,7 @@ async def _start(args: argparse.Namespace) -> None:
         amount_cents=args.amount_cents,
         reason=args.reason,
         dry_run=dry_run,
+        # Demo-only: --hold keeps the run open after the refund until `release`.
         hold_after_effect=args.hold,
         model_provider=args.model_provider,
     )
@@ -98,7 +99,7 @@ async def _start(args: argparse.Namespace) -> None:
 
 async def _approve(args: argparse.Namespace) -> None:
     client = await _client()
-    handle = client.get_workflow_handle_for(RefundWorkflow, args.workflow_id)
+    handle = client.get_workflow_handle_for(RefundWorkflow.run, args.workflow_id)
     try:
         await handle.signal(RefundWorkflow.approve, args.note)
     except RPCError as error:
@@ -113,8 +114,9 @@ async def _approve(args: argparse.Namespace) -> None:
 
 
 async def _release(args: argparse.Namespace) -> None:
+    # Sends the demo-only `release` Signal that ends a held run's wait.
     client = await _client()
-    handle = client.get_workflow_handle_for(RefundWorkflow, args.workflow_id)
+    handle = client.get_workflow_handle_for(RefundWorkflow.run, args.workflow_id)
     try:
         await handle.signal(RefundWorkflow.release)
     except RPCError as error:
@@ -142,7 +144,7 @@ async def _stop(args: argparse.Namespace) -> None:
 
 async def _result(args: argparse.Namespace) -> None:
     client = await _client()
-    handle = client.get_workflow_handle_for(RefundWorkflow, args.workflow_id)
+    handle = client.get_workflow_handle_for(RefundWorkflow.run, args.workflow_id)
     try:
         result: RefundResult = await handle.result()
     except WorkflowFailureError as error:
@@ -284,7 +286,8 @@ async def _inspect(args: argparse.Namespace) -> None:
         raise
     history = await handle.fetch_history()
     rows, final_attempts = _event_rows(history)
-    status = description.status.name
+    # The SDK reports an unspecified status as None.
+    status = description.status.name if description.status else "UNSPECIFIED"
     pending = [
         {
             "activity": item.activity_type.name,

@@ -700,7 +700,8 @@ def _naive_args(**changes) -> argparse.Namespace:
 def test_demo_one_live_loop_runs_the_shared_model_step(
     tmp_path, monkeypatch, capsys
 ) -> None:
-    from refund_agent import activities, naive_refund
+    from refund_agent import naive_refund
+    from refund_agent.activities import model
 
     monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("LOG_MODEL_USAGE", "1")
@@ -718,7 +719,7 @@ def test_demo_one_live_loop_runs_the_shared_model_step(
         ],
         sent,
     )
-    monkeypatch.setattr(activities, "OpenAI", lambda **_kw: client)
+    monkeypatch.setattr(model, "OpenAI", lambda **_kw: client)
     monkeypatch.setattr("sys.stdin", io.StringIO("\ntorn wing\n"))
 
     decision = naive_refund._run_interactive_agent_loop(

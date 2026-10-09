@@ -22,7 +22,14 @@ with workflow.unsafe.imports_passed_through():
         lookup_customer_history,
         lookup_order,
     )
-    from refund_agent.models import RefundDecision, RefundRequest, RefundResult
+    from refund_agent.models import (
+        CustomerHistory,
+        OrderDetails,
+        RefundDecision,
+        RefundRequest,
+        RefundResult,
+        ReturnStatus,
+    )
 
 # The loop is bounded so a model that never decides fails loudly instead of
 # looping forever.
@@ -47,10 +54,14 @@ def refund_activity_timeouts(request: RefundRequest) -> tuple[timedelta, timedel
     other run keeps 15 s.
     """
 
+    # Demo-only tuning: fast_recovery is set only by the stage runner. Its failure
+    # drills kill the Worker mid-Activity, and 3 s shows attempt 2 within seconds
+    # instead of after 15 s. A real app picks one heartbeat timeout and keeps it.
     simulated_loss = request.simulate_stripe_timeout or request.simulate_stripe_retry
     heartbeat_seconds = 3 if request.fast_recovery and simulated_loss else 15
     # Start-to-close bounds one attempt and stays above both the heartbeat
-    # timeout and the Stripe client timeout.
+    # timeout and the Stripe client timeout. Stage runs allow 6 minutes, since
+    # the stage can hold attempt 1 open on purpose (EFFECT_RESTART_WINDOW_SECONDS).
     start_to_close_minutes = 6 if request.fast_recovery else 1
     return (
         timedelta(seconds=heartbeat_seconds),
@@ -115,9 +126,13 @@ class RefundWorkflow:
                 workflow.logger.info(
                     f"EXECUTION STATE | phase=waiting_for_answer id={question_id}"
                 )
-                await workflow.wait_condition(
-                    lambda question_id=question_id: question_id in self.customer_answers
-                )
+
+                # A named function, because mypy cannot type a lambda that binds
+                # the loop variable through a default argument.
+                def answered(question_id: str = question_id) -> bool:
+                    return question_id in self.customer_answers
+
+                await workflow.wait_condition(answered)
                 answer = self.customer_answers[question_id]
                 self.working_memory.append(
                     {
@@ -132,8 +147,8 @@ class RefundWorkflow:
                 )
                 continue
             # A tool the agent chose. Results become part of what it knows.
-            result = await self._run_tool(step.tool, request)
-            self.working_memory.append({"tool": step.tool, "result": result})
+            tool_result = await self._run_tool(step.tool, request)
+            self.working_memory.append({"tool": step.tool, "result": tool_result})
             workflow.logger.info(f"EXECUTION STATE | phase=observed tool={step.tool}")
 
         if decision is None:
@@ -172,7 +187,12 @@ class RefundWorkflow:
             )
 
         if request.hold_before_effect:
-            # The loop has observed the customer answers and authoritative
+            # DEMO-ONLY PAUSE before the refund. The Workflow waits for the
+            # `release` Signal, so the stage can stop the Worker at the same point
+            # every run and send `release` once a new Worker starts. A real
+            # Workflow goes straight to the refund: its Worker can die at any
+            # step, and recovery works the same way.
+            # By here the loop has observed the customer answers and authoritative
             # lookups, then chosen the refund as its next action. Temporal keeps
             # that position while no Worker is available.
             self.stage_phase_value = "ready_to_refund"
@@ -211,6 +231,8 @@ class RefundWorkflow:
         )
 
         if request.hold_after_effect:
+            # Demo-only wait for the manual walkthrough (refund-demo start --hold,
+            # then refund-demo release). A real Workflow returns the result here.
             # DURABLE WAIT after the effect: the refund is already recorded, so a
             # restart here replays that completed step instead of repeating it.
             self.stage_phase_value = "holding_after_effect"
@@ -228,6 +250,7 @@ class RefundWorkflow:
         # Dispatch is deterministic: the tool name came from a recorded result,
         # and the arguments come from the request, not from the model.
         # Each summary names the step in plain words in Event History.
+        result: OrderDetails | CustomerHistory | ReturnStatus
         if tool == "lookup_order":
             result = await workflow.execute_activity(
                 lookup_order,
@@ -266,7 +289,10 @@ class RefundWorkflow:
 
     @workflow.signal
     def release(self) -> None:
-        # EXECUTION STATE: lets a held run finish once the restart has been shown.
+        # EXECUTION STATE, demo-only: ends the hold_before_effect or
+        # hold_after_effect wait once the restart has been shown. The stage runner
+        # sends it after starting the new Worker; `refund-demo release` sends it
+        # by hand. A real Workflow has no such Signal.
         self.released = True
 
     @workflow.signal

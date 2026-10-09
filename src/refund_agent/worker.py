@@ -37,6 +37,8 @@ async def run_worker() -> None:
     workflow.logger.workflow_info_on_message = False
     validate_stripe_key(os.getenv("STRIPE_API_KEY"), required=False)
 
+    # Demo-only PID file: `refund-demo kill-worker` reads it to SIGKILL this
+    # Worker, and the stage runner reads it to know the Worker is up.
     pid_path = worker_pid_file()
     pid_path.parent.mkdir(parents=True, exist_ok=True)
     pid_path.write_text(f"{os.getpid()}\n", encoding="utf-8")

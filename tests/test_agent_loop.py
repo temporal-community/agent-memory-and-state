@@ -144,22 +144,22 @@ class _FakeClient:
 
 
 def test_openai_step_maps_tool_and_decision(monkeypatch) -> None:
-    from refund_agent import activities
+    from refund_agent.activities import model
 
     monkeypatch.setenv("OPENAI_MODEL", "test-model")
     request = _request(8000)
 
     monkeypatch.setattr(
-        activities,
+        model,
         "OpenAI",
         lambda **_kw: _FakeClient([_FakeCall("lookup_order", '{"order_id": "o1"}')]),
     )
-    step = activities._openai_step(request, [], "key")
+    step = model._openai_step(request, [], "key")
     assert step.action == "use_tool"
     assert step.tool == "lookup_order"
 
     monkeypatch.setattr(
-        activities,
+        model,
         "OpenAI",
         lambda **_kw: _FakeClient(
             [
@@ -170,12 +170,12 @@ def test_openai_step_maps_tool_and_decision(monkeypatch) -> None:
             ]
         ),
     )
-    step = activities._openai_step(request, [], "key")
+    step = model._openai_step(request, [], "key")
     assert step.action == "decide"
     assert step.recommendation == "approve"
 
     monkeypatch.setattr(
-        activities,
+        model,
         "OpenAI",
         lambda **_kw: _FakeClient(
             [
@@ -187,7 +187,7 @@ def test_openai_step_maps_tool_and_decision(monkeypatch) -> None:
             ]
         ),
     )
-    step = activities._openai_step(request, [], "key")
+    step = model._openai_step(request, [], "key")
     assert step.action == "ask_customer"
     assert step.question_id == "damage"
 
@@ -221,24 +221,24 @@ class _FakeAnthropicClient:
 
 
 def test_anthropic_step_maps_tool_and_decision(monkeypatch) -> None:
-    from refund_agent import activities
+    from refund_agent.activities import model
 
     monkeypatch.setenv("ANTHROPIC_MODEL", "test-claude")
     request = _request(8000)
 
     monkeypatch.setattr(
-        activities,
+        model,
         "Anthropic",
         lambda **_kw: _FakeAnthropicClient(
             [_FakeAnthropicBlock("lookup_order", {"order_id": "o1"})]
         ),
     )
-    step = activities._anthropic_step(request, [], "key")
+    step = model._anthropic_step(request, [], "key")
     assert step.action == "use_tool"
     assert step.tool == "lookup_order"
 
     monkeypatch.setattr(
-        activities,
+        model,
         "Anthropic",
         lambda **_kw: _FakeAnthropicClient(
             [
@@ -249,12 +249,12 @@ def test_anthropic_step_maps_tool_and_decision(monkeypatch) -> None:
             ]
         ),
     )
-    step = activities._anthropic_step(request, [], "key")
+    step = model._anthropic_step(request, [], "key")
     assert step.action == "decide"
     assert step.recommendation == "approve"
 
     monkeypatch.setattr(
-        activities,
+        model,
         "Anthropic",
         lambda **_kw: _FakeAnthropicClient(
             [
@@ -269,13 +269,13 @@ def test_anthropic_step_maps_tool_and_decision(monkeypatch) -> None:
             ]
         ),
     )
-    step = activities._anthropic_step(request, [], "key")
+    step = model._anthropic_step(request, [], "key")
     assert step.action == "ask_customer"
     assert step.question_id == "damage"
 
 
 def test_model_clients_leave_every_retry_to_temporal(monkeypatch) -> None:
-    from refund_agent import activities
+    from refund_agent.activities import model
 
     # Both SDKs retry inside the call by default, where Temporal can't see it.
     # The clients disable that, and their timeout must end before the 60 s
@@ -296,10 +296,10 @@ def test_model_clients_leave_every_retry_to_temporal(monkeypatch) -> None:
             [_FakeAnthropicBlock("lookup_order", {"order_id": "o1"})]
         )
 
-    monkeypatch.setattr(activities, "OpenAI", fake_openai)
-    monkeypatch.setattr(activities, "Anthropic", fake_anthropic)
-    activities._openai_step(_request(8000), [], "key")
-    activities._anthropic_step(_request(8000), [], "key")
+    monkeypatch.setattr(model, "OpenAI", fake_openai)
+    monkeypatch.setattr(model, "Anthropic", fake_anthropic)
+    model._openai_step(_request(8000), [], "key")
+    model._anthropic_step(_request(8000), [], "key")
 
     assert set(built) == {"openai", "anthropic"}
     for kwargs in built.values():
@@ -328,19 +328,19 @@ class _RecordingMessages:
 
 
 def test_model_prompts_show_money_as_dollars_not_cents(monkeypatch) -> None:
-    from refund_agent import activities
+    from refund_agent.activities import model
 
     monkeypatch.delenv("LOG_MODEL_USAGE", raising=False)
     monkeypatch.setenv("OPENAI_MODEL", "test-model")
     monkeypatch.setenv("ANTHROPIC_MODEL", "test-claude")
     sent: list[dict] = []
     monkeypatch.setattr(
-        activities,
+        model,
         "OpenAI",
         lambda **_kw: SimpleNamespace(responses=_RecordingResponses(sent)),
     )
     monkeypatch.setattr(
-        activities,
+        model,
         "Anthropic",
         lambda **_kw: SimpleNamespace(messages=_RecordingMessages(sent)),
     )
@@ -349,8 +349,8 @@ def test_model_prompts_show_money_as_dollars_not_cents(monkeypatch) -> None:
         {"tool": TOOL_ORDER, "result": asdict(lookup_order(request.order_id))}
     ]
 
-    activities._openai_step(request, working_memory, "key")
-    activities._anthropic_step(request, working_memory, "key")
+    model._openai_step(request, working_memory, "key")
+    model._anthropic_step(request, working_memory, "key")
 
     openai_prompt = sent[0]["input"]
     anthropic_prompt = sent[1]["messages"][0]["content"]
@@ -367,18 +367,18 @@ def test_model_prompts_show_money_as_dollars_not_cents(monkeypatch) -> None:
 
 
 def test_intake_questions_stay_code_driven_on_the_live_model(monkeypatch) -> None:
-    from refund_agent import activities
+    from refund_agent.activities import model
 
     def no_model(**_kwargs):
         raise AssertionError("an intake question must not call the model")
 
     monkeypatch.setenv("OPENAI_API_KEY", "key")
-    monkeypatch.setattr(activities, "OpenAI", no_model)
+    monkeypatch.setattr(model, "OpenAI", no_model)
     request = replace(
         _request(8000), interactive_questions=True, model_provider="openai"
     )
 
-    step = activities.decide_next_step(request, [])
+    step = model.decide_next_step(request, [])
 
     assert (step.action, step.question_id) == ("ask_customer", "item_opened")
 
@@ -388,7 +388,7 @@ def test_the_activity_keeps_its_name_and_runs_the_shared_decision(
 ) -> None:
     from temporalio.testing import ActivityEnvironment
 
-    from refund_agent import activities
+    from refund_agent.activities import model
 
     monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
     request = replace(_request(8000), use_canned_agent=True)
@@ -400,21 +400,19 @@ def test_the_activity_keeps_its_name_and_runs_the_shared_decision(
         },
     ]
     shared: list[tuple] = []
-    original = activities.decide_next_step
+    original = model.decide_next_step
 
     def recording_decide(*args, **kwargs):
         shared.append(args)
         return original(*args, **kwargs)
 
-    monkeypatch.setattr(activities, "decide_next_step", recording_decide)
+    monkeypatch.setattr(model, "decide_next_step", recording_decide)
 
     step = ActivityEnvironment().run(
-        activities.agent_decide_next_step, request, working_memory
+        model.agent_decide_next_step, request, working_memory
     )
 
-    definition = activity._Definition.must_from_callable(
-        activities.agent_decide_next_step
-    )
+    definition = activity._Definition.must_from_callable(model.agent_decide_next_step)
     assert definition.name == "agent_decide_next_step"
     assert shared == [(request, working_memory)]
     assert step == _canned_step(request, working_memory)
@@ -443,7 +441,7 @@ def _usage_records(path) -> list[dict]:
 
 
 def test_openai_usage_is_logged_as_counts_only(tmp_path, monkeypatch) -> None:
-    from refund_agent import activities
+    from refund_agent.activities import model
 
     monkeypatch.setenv("LOG_MODEL_USAGE", "1")
     monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
@@ -455,14 +453,14 @@ def test_openai_usage_is_logged_as_counts_only(tmp_path, monkeypatch) -> None:
         output_tokens_details=SimpleNamespace(reasoning_tokens=300),
     )
     monkeypatch.setattr(
-        activities,
+        model,
         "OpenAI",
         lambda **_kw: _FakeClient(
             [_FakeCall("lookup_order", '{"order_id": "o1"}')], usage
         ),
     )
 
-    activities._openai_step(_request(8000), [], "sk-test-not-logged")
+    model._openai_step(_request(8000), [], "sk-test-not-logged")
 
     log = tmp_path / "model-usage.jsonl"
     (record,) = _usage_records(log)
@@ -483,7 +481,7 @@ def test_openai_usage_is_logged_as_counts_only(tmp_path, monkeypatch) -> None:
 def test_anthropic_usage_counts_cache_reads_and_writes_as_input(
     tmp_path, monkeypatch
 ) -> None:
-    from refund_agent import activities
+    from refund_agent.activities import model
 
     monkeypatch.setenv("LOG_MODEL_USAGE", "yes")
     monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
@@ -497,14 +495,14 @@ def test_anthropic_usage_counts_cache_reads_and_writes_as_input(
         output_tokens_details=None,
     )
     monkeypatch.setattr(
-        activities,
+        model,
         "Anthropic",
         lambda **_kw: _FakeAnthropicClient(
             [_FakeAnthropicBlock("lookup_order", {"order_id": "o1"})], usage
         ),
     )
 
-    activities._anthropic_step(_request(8000), [], "key")
+    model._anthropic_step(_request(8000), [], "key")
 
     (record,) = _usage_records(tmp_path / "model-usage.jsonl")
     assert set(record) == _USAGE_KEYS
@@ -519,13 +517,13 @@ def test_anthropic_usage_counts_cache_reads_and_writes_as_input(
 def test_usage_inside_an_activity_names_the_workflow_and_attempt(tmp_path) -> None:
     from temporalio.testing import ActivityEnvironment
 
-    from refund_agent import activities
+    from refund_agent.activities import model
 
     log = tmp_path / "model-usage.jsonl"
     usage = SimpleNamespace(input_tokens=10, output_tokens=5)
 
     ActivityEnvironment().run(
-        activities._record_usage, log, "anthropic", "test-claude", usage
+        model._record_usage, log, "anthropic", "test-claude", usage
     )
 
     (record,) = _usage_records(log)
@@ -534,21 +532,21 @@ def test_usage_inside_an_activity_names_the_workflow_and_attempt(tmp_path) -> No
 
 
 def test_usage_log_is_off_by_default(tmp_path, monkeypatch) -> None:
-    from refund_agent import activities
+    from refund_agent.activities import model
 
     monkeypatch.delenv("LOG_MODEL_USAGE", raising=False)
     monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("OPENAI_MODEL", "test-model")
     usage = SimpleNamespace(input_tokens=1, output_tokens=1)
     monkeypatch.setattr(
-        activities,
+        model,
         "OpenAI",
         lambda **_kw: _FakeClient(
             [_FakeCall("lookup_order", '{"order_id": "o1"}')], usage
         ),
     )
 
-    activities._openai_step(_request(8000), [], "key")
+    model._openai_step(_request(8000), [], "key")
 
     assert not (tmp_path / "model-usage.jsonl").exists()
 
@@ -654,7 +652,7 @@ def test_usage_command_prints_tokens_and_dollars(tmp_path, capsys) -> None:
 def test_usage_command_reports_demo_one_and_demo_two_apart(
     tmp_path, monkeypatch, capsys
 ) -> None:
-    from refund_agent import activities
+    from refund_agent.activities import model
     from refund_agent.cli import _parser, _usage
 
     monkeypatch.setenv("LOG_MODEL_USAGE", "1")
@@ -668,11 +666,11 @@ def test_usage_command_reports_demo_one_and_demo_two_apart(
         )
 
     # Demo 1's naive process tags its calls; the Activity path keeps the default.
-    monkeypatch.setattr(activities, "OpenAI", client_with(1000))
-    activities._openai_step(_request(8000), [], "key", agent="naive")
-    activities._openai_step(_request(8000), [], "key", agent="naive")
-    monkeypatch.setattr(activities, "OpenAI", client_with(3000))
-    activities._openai_step(_request(8000), [], "key")
+    monkeypatch.setattr(model, "OpenAI", client_with(1000))
+    model._openai_step(_request(8000), [], "key", agent="naive")
+    model._openai_step(_request(8000), [], "key", agent="naive")
+    monkeypatch.setattr(model, "OpenAI", client_with(3000))
+    model._openai_step(_request(8000), [], "key")
 
     records = _usage_records(tmp_path / "model-usage.jsonl")
     assert [record["agent"] for record in records] == ["naive", "naive", "temporal"]
@@ -721,7 +719,7 @@ def test_short_heartbeat_only_where_the_stage_kills_the_worker_mid_refund(
 def test_real_refund_call_is_bounded_and_leaves_retries_to_temporal(
     monkeypatch,
 ) -> None:
-    from refund_agent import activities
+    from refund_agent.activities import refund
 
     monkeypatch.setenv("STRIPE_API_KEY", "sk_test_example")
     monkeypatch.setattr(stripe, "api_key", None)
@@ -735,7 +733,7 @@ def test_real_refund_call_is_bounded_and_leaves_retries_to_temporal(
 
     monkeypatch.setattr(stripe.Refund, "create", fake_create)
 
-    effect = activities._real_stripe_refund(_request(8000), "wf", "key-1")
+    effect = refund._real_stripe_refund(_request(8000), "wf", "key-1")
 
     assert effect == {
         "refund_id": "re_test",
@@ -789,7 +787,7 @@ def test_issue_refund_retries_only_transient_stripe_failures(
 ) -> None:
     from temporalio.testing import ActivityEnvironment
 
-    from refund_agent import activities
+    from refund_agent.activities import refund
 
     monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
     monkeypatch.delenv("EFFECT_RESTART_WINDOW_SECONDS", raising=False)
@@ -797,12 +795,12 @@ def test_issue_refund_retries_only_transient_stripe_failures(
     def failing_refund(*_args):
         raise error
 
-    monkeypatch.setattr(activities, "_real_stripe_refund", failing_refund)
+    monkeypatch.setattr(refund, "_real_stripe_refund", failing_refund)
     decision = RefundDecision(recommendation="approve", rationale="", source="test")
 
     with pytest.raises(ApplicationError) as raised:
         ActivityEnvironment().run(
-            activities.issue_refund,
+            refund.issue_refund,
             replace(_request(8000), dry_run=False),
             decision,
             [],
@@ -815,16 +813,16 @@ def test_issue_refund_retries_only_transient_stripe_failures(
 def _run_real_refund(monkeypatch, tmp_path, fake_refund, on_heartbeat=None):
     from temporalio.testing import ActivityEnvironment
 
-    from refund_agent import activities
+    from refund_agent.activities import refund
 
     monkeypatch.setenv("DEMO_STATE_DIR", str(tmp_path))
     monkeypatch.delenv("EFFECT_RESTART_WINDOW_SECONDS", raising=False)
-    monkeypatch.setattr(activities, "_real_stripe_refund", fake_refund)
+    monkeypatch.setattr(refund, "_real_stripe_refund", fake_refund)
     environment = ActivityEnvironment()
     if on_heartbeat is not None:
         environment.on_heartbeat = on_heartbeat
     return environment.run(
-        activities.issue_refund,
+        refund.issue_refund,
         replace(_request(8000), dry_run=False),
         RefundDecision(recommendation="approve", rationale="", source="test"),
         [],
