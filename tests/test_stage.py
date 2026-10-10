@@ -193,10 +193,13 @@ def test_stage_role_copy_separates_context_memory_and_state() -> None:
 
     assert "CONTEXT" in text
     assert "what the agent can see" in text
-    assert "MEMORY" in text
+    assert "LONG-TERM MEMORY" in text
     assert "remembers or looks up" in text
     assert "STATE" in text
-    assert "the official record: what's done and what's next" in text
+    assert "execution" in text
+    assert "what's done and what's next" in text
+    assert "effect" in text
+    assert "whether the refund really happened" in text
     assert "act and recover safely" not in text
 
 
