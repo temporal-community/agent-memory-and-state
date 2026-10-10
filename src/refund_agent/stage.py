@@ -49,15 +49,20 @@ _SIMULATED_RETRY_DETECTION_SECONDS = 4
 
 def _roles() -> Panel:
     body = Text()
-    body.append("CONTEXT  ", style="bold yellow")
+    body.append("This demo explains three of them:\n\n", style="dim")
+    body.append("CONTEXT           ", style="bold yellow")
     body.append("what the agent can see right now\n")
-    body.append("MEMORY   ", style="bold blue")
+    body.append("LONG-TERM MEMORY  ", style="bold blue")
     body.append("what the agent remembers or looks up\n")
-    body.append("STATE    ", style="bold green")
-    body.append("the official record: what's done and what's next")
+    body.append("STATE             ", style="bold green")
+    body.append("the official records; this demo shows two types:\n")
+    body.append("  execution       ", style="green")
+    body.append("what's done and what's next (Temporal)\n")
+    body.append("  effect          ", style="green")
+    body.append("whether the refund really happened (the payment record)")
     return Panel(
         body,
-        title="Three things that help an agent act",
+        title="An agent works with different kinds of information",
         border_style="white",
     )
 

@@ -18,26 +18,34 @@ that well starts with knowing the difference between an agent's memory and its
 state.
 
 This repo steps you through that difference with a working demo and the
-resources behind it. An agent works with four kinds of information:
+resources behind it. An agent works with different kinds of information, and
+the demo explains three of them:
 
 - **Context:** what the agent has in front of it for the current decision: the
   request, the conversation so far, and the results of its last steps. The
   model reasons only on what's in context, so what goes in, and what's left
   out, shapes every choice it makes. It's sometimes called working memory.
-- **Long-term memory:** what the agent carries from one run to the next, such
-  as past cases, facts, and instructions. It lives in a store you own, and the
+- **Long-term memory:** what the agent carries from one run to the next.
+  Memory comes in many types, such as past cases (episodic), facts (semantic),
+  and how-to instructions (procedural). It lives in a store you own, and the
   agent pulls from it into context when it needs it.
-- **Execution state:** where the work stands, meaning which steps are done and
-  what comes next. Temporal records it in Event History, outside the agent's
-  process, so a new process can pick the work back up.
-- **Effect state:** whether an action in the outside world, such as a refund,
-  actually happened. The system that performed it, Stripe in this demo, is the
-  source of truth.
+- **State:** the facts the agent relies on but doesn't own, each kept by the
+  system that owns it. State comes in many types, such as execution,
+  authorization, effect, and domain state, and this demo shows two of them:
+  - **Execution state:** where the work stands, meaning which steps are done
+    and what comes next. Temporal records it in Event History, outside the
+    agent's process, so a new process can pick the work back up.
+  - **Effect state:** whether an action in the outside world, such as a
+    refund, actually happened. The system that performed it, Stripe in this
+    demo, is the source of truth.
 
-The demo centers on execution state, because that's the part people most often
-expect memory to cover. Along the way it shows what memory does well and where
-it stops: a memory store can bring back what an agent knew, but it can't tell a
-new process where the work stood or whether the last action went through.
+The goal is to make clear what context, long-term memory, and state are for an
+agent, so you can build agents that run longer and take on more complex work.
+The demo stops the same agent mid-task twice, once without Temporal and once
+with it, so you can see where each kind of information lives and which ones
+survive a crash. A memory store can bring back what an agent knew, but it can't
+tell a new process where the work stood or whether the last action went
+through. That's the job of state.
 
 **What happens to an AI agent's in-flight work when its process dies?** The
 demo kills a customer-support refund agent one step before it refunds the
@@ -252,11 +260,68 @@ you would write them for a real app. Comments in
 
 ## Context, memory, and state
 
-<a id="memory-and-execution-state"></a>The four kinds of information at the top
-of this page do different jobs, and an agent needs all of them. Only context
-lives inside the loop. Long-term memory and the two kinds of state live outside
-it, in systems that outlast the agent's process. The table shows what each one
-is in this demo and where to find it.
+<a id="memory-and-execution-state"></a><a id="key-ideas"></a>These are the key ideas from the
+[video](#videos) and its slides.
+
+**Agents are loops.** On each turn, the model reasons on what it has seen so
+far, then acts through a tool call, a write, or a message. The result goes back
+into context for the next turn, and the loop repeats until it reaches a goal, a
+stop condition, or a failure. The more autonomy an agent has, the more of its
+path it chooses at runtime, so you can't lay out every step ahead of time. We're
+also giving agents harder work, such as writing code, creating tools, and even
+improving themselves. That makes an agent a long-running, complex system, and it
+needs context, memory, and state to do that work well.
+
+**Context** is what the model reasons on, and it's the only one of the three
+that lives inside the loop. It grows every turn, but the context window is only
+a buffer. Preparing what goes into it is what makes it act like working memory.
+These are the common ways to manage it:
+
+- **Stuff the window** puts everything in the prompt.
+- **Truncate** drops the oldest turns.
+- **Compact** summarizes old turns. It's today's default.
+- **Retrieve** brings in what's needed through RAG, memory files, or memory
+  tools.
+- **Bigger windows** of a million tokens have already shipped.
+- **Self-curating context**, still emerging, lets the agent edit its own
+  context.
+
+**Memory comes in many kinds, and each one lives somewhere different:**
+
+- **Working memory** is like a whiteboard: what's active for the current
+  decision. For an agent, that's its context.
+- **Episodic memory** is like a diary: past experiences and events, kept in run
+  logs and transcripts.
+- **Semantic memory** is like an encyclopedia: facts as the agent recalls them,
+  kept in a vector store or a knowledge base.
+- **Procedural memory** is like a recipe: skills and how to do things, kept in
+  skill files and tool definitions.
+- **Parametric memory** is what the model already knew from training. It's in
+  the weights, and you can't edit it while the agent runs.
+
+Episodic, semantic, and procedural memory together make up long-term memory. A
+long-running agent can't keep everything in its window, so it pulls in only
+what each decision needs. A refund skill, for example, waits in a skill file
+until a refund comes up. Memory helps the agent decide, but it can be out of
+date.
+
+Context and memory cover what the agent knows, not where the work stands.
+**State** is about who owns each fact the agent relies on, and each owner is a
+system of record. State comes in many types, such as execution state,
+authorization state, effect state, and domain state. The demo shows two of
+them:
+
+- **Execution state** is where the work stands, and Temporal records it. After
+  the crash, a new Worker replays Event History and runs only the refund.
+- **Effect state** is whether the refund actually happened, and Stripe owns it.
+  Every retry sends the same idempotency key, so Stripe makes one refund.
+
+Memory helps the reasoning continue, and Temporal helps the operation continue.
+
+![The refund agent's loop, with context, memory, and state labeled. In the loop: Reason / Observe (agent_decide_next_step, one model call given everything it has seen so far, or a fixed policy offline) decides what to do next; Act takes one action per turn: ask the customer on turns 1 and 2 ("Was the package opened?" Yes; "What was damaged?" Split seam), lookup_order on turn 3 (order 1234: python plushy, $80.00, delivered), lookup_customer_history on turn 4 (824 days as a customer, 1 prior refund), check_refund_policy if chosen (eligible, no return needed), and Decide on the last turn (approve, escalate, or deny, which leaves the loop). Results go back into context, and on approve the loop exits to issue_refund, the one side effect. Context, inside the loop, is what the model sees this turn: the customer's message "Please refund order 1234", the two answers, the order it just looked up, the customer's history, and its own last step. Outside the loop, long-term memory is what carries across runs in a store, such as the refund policy, which cases need escalation, and how this customer was handled before; none is saved in this demo, and lookups tagged (memory) stand in for retrieval. State is the facts the model doesn't own: execution state in Temporal's Event History (steps already run, 2 answers and 2 lookups; next action issue refund; attempts on the refund call) and effect state in Stripe, the system of record (payment PAID; refund none yet, then one refund, SUCCEEDED). After the crash, Demo 1's execution state lived only in the process, so it's gone and the customer starts over; in Demo 2 it is read back from Event History, and a new Worker resumes at issue refund.](assets/agent-loop.png)
+
+The diagram places each kind of information around the demo's agent loop. The
+table shows what each one is in this demo and where to find it.
 
 | | What it helps with | In this demo | Where to find it |
 | --- | --- | --- | --- |

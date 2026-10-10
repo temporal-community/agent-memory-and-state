@@ -311,10 +311,13 @@ are in capitals.
 Agent memory and state
   An agent can know exactly what to do and still lose the work a customer submitted.
   We'll stop the agent right before it calls Stripe: first without Temporal, then with it.
-Three things that help an agent act
-  CONTEXT  what the agent can see right now
-  MEMORY   what the agent remembers or looks up
-  STATE    the official record: what's done and what's next
+An agent works with different kinds of information
+  This demo explains three of them:
+  CONTEXT           what the agent can see right now
+  LONG-TERM MEMORY  what the agent remembers or looks up
+  STATE             the official records; this demo shows two types:
+    execution       what's done and what's next (Temporal)
+    effect          whether the refund really happened (the payment record)
 Press Enter to start Demo 1 (without Temporal)
 
 Demo 1: Without Temporal, the agent loses its place
